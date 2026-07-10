@@ -91,7 +91,11 @@ export function ReviewPool() {
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortAsc, setSortAsc] = useState(false);
   const [minScore, setMinScore] = useState(0);
+  const [firstOnly, setFirstOnly] = useState(false);
   const [search, setSearch] = useState("");
+  const [sampleDays, setSampleDays] = useState<import("@/lib/api").SampleDaySummary[]>([]);
+  const [sampleDay, setSampleDay] = useState<string | null>(null);
+  const [sampleEntries, setSampleEntries] = useState<import("@/lib/api").SampleEntry[]>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [manualInput, setManualInput] = useState("");
   const [detail, setDetail] = useState<ScanCandidate | null>(null);
@@ -144,6 +148,14 @@ export function ReviewPool() {
     loadPool();
     loadStats();
   }, []);
+  useEffect(() => {
+    if (tab === "stats") api.reviewSampleDays().then(setSampleDays).catch(() => {});
+  }, [tab]);
+  const openSampleDay = (d: string) => {
+    if (sampleDay === d) { setSampleDay(null); return; }
+    setSampleDay(d);
+    api.reviewSampleDay(d).then(setSampleEntries).catch((e) => toast.error(e.message));
+  };
 
   const poolCodesToday = useMemo(() => {
     const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" });
@@ -157,10 +169,11 @@ export function ReviewPool() {
     if (hideFlagged) rows = rows.filter((c) => c.flags.length === 0);
     if (minAmount3) rows = rows.filter((c) => (c.amount ?? 0) >= 3e8);
     if (minScore > 0) rows = rows.filter((c) => (c.score ?? 0) >= minScore);
+    if (firstOnly) rows = rows.filter((c) => c.first_hit);
     const q = search.trim().toLowerCase();
     if (q) rows = rows.filter((c) => c.code.toLowerCase().includes(q) || c.name.toLowerCase().includes(q));
     return rows;
-  }, [scan, strategy, hideFlagged, minAmount3, minScore, search]);
+  }, [scan, strategy, hideFlagged, minAmount3, minScore, firstOnly, search]);
 
   // 排序：表头点击优先；否则按视角默认（皆为公开的客观键，null 沉底）
   const sorted = useMemo(() => {
@@ -350,6 +363,11 @@ export function ReviewPool() {
           {STRATEGY_NAME[s] || s}
         </span>
       ))}
+      {c.first_hit ? (
+        <span className="rounded bg-success/15 px-1.5 py-0.5 text-[11px] text-success" title="近 5 个存档日内首次命中">首次</span>
+      ) : c.hit_streak > 1 ? (
+        <span className="rounded bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground" title={`连续 ${c.hit_streak} 天命中`}>续{c.hit_streak}</span>
+      ) : null}
     </div>
   );
   const PoolBtn = ({ c }: { c: ScanCandidate }) =>
@@ -524,6 +542,9 @@ export function ReviewPool() {
           {scan?.pool_note && (
             <p className="mb-2 text-[11px] text-amber-500">{scan.pool_note}</p>
           )}
+          {scan?.adaptive_note && (
+            <p className="mb-2 text-[11px] text-sky-500">{scan.adaptive_note}</p>
+          )}
 
           {/* 视角切换（同一候选集的四种客观投影） */}
           <div className="mb-3 flex flex-wrap items-center gap-1.5 border-b border-border/40 pb-3">
@@ -575,6 +596,10 @@ export function ReviewPool() {
             <label className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground">
               <input type="checkbox" checked={minAmount3} onChange={(e) => setMinAmount3(e.target.checked)} />
               成交额＞3亿
+            </label>
+            <label className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground" title="近 5 个存档日内首次命中（启动信号，区别于连续放量第 N 天）">
+              <input type="checkbox" checked={firstOnly} onChange={(e) => setFirstOnly(e.target.checked)} />
+              只看首次命中
             </label>
             <select
               value={minScore}
@@ -821,6 +846,66 @@ export function ReviewPool() {
                 </div>
               ))}
               <p className="text-[11px] leading-relaxed text-muted-foreground/70">{stats.note}</p>
+
+              {/* 存档回看：那天筛出了什么、后来走得怎样 */}
+              {sampleDays.length > 0 && (
+                <div>
+                  <h4 className="mb-1.5 text-sm font-semibold">存档回看</h4>
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {sampleDays.map((d) => (
+                      <button
+                        key={d.date}
+                        onClick={() => openSampleDay(d.date)}
+                        className={cn(
+                          "rounded-full px-2.5 py-1 text-xs transition-colors",
+                          sampleDay === d.date ? "bg-primary/15 font-medium text-primary" : "bg-muted/40 text-muted-foreground hover:text-foreground",
+                        )}
+                      >
+                        {d.date}（{d.n}{d.mature_n ? ` · 熟${d.mature_n}` : ""}）
+                      </button>
+                    ))}
+                  </div>
+                  {sampleDay && (
+                    <div className="max-h-96 overflow-auto">
+                      <table className="w-full text-sm">
+                        <thead className={theadCls}>
+                          <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                            <th className="px-2 py-2 font-medium">名称</th>
+                            <th className="px-2 py-2 font-medium">行业</th>
+                            <th className="px-2 py-2 font-medium">策略</th>
+                            {["综合", "当日涨%", "成交额", "信号收盘", "1D", "3D", "5D", "10D", "MFE", "MAE"].map((h) => (
+                              <th key={h} className="whitespace-nowrap px-2 py-2 text-right font-medium">{h}</th>
+                            ))}
+                            <th className="px-2 py-2 font-medium">状态</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sampleEntries.map((e) => (
+                            <tr key={e.code} className="border-b border-border/30 even:bg-white/[0.02]">
+                              <td className="px-2 py-2">
+                                <span className="font-medium">{e.name}</span>
+                                <span className="ml-1.5 font-mono text-xs text-muted-foreground">{e.code}</span>
+                              </td>
+                              <td className="max-w-28 truncate px-2 py-2 text-xs text-muted-foreground">{e.industry || "—"}</td>
+                              <td className="px-2 py-2 text-xs text-muted-foreground">{e.strategies.map((s) => STRATEGY_NAME[s] || s).join("/")}</td>
+                              <td className={cn(numTd, scoreColor(e.score ?? 0))}>{e.score ?? "—"}</td>
+                              <td className={cn(numTd, color(e.pct))}>{pct(e.pct)}</td>
+                              <td className={cn(numTd, "text-muted-foreground")}>{yi(e.amount)}</td>
+                              <td className={cn(numTd, "text-muted-foreground")}>{e.signal_close ?? "—"}</td>
+                              {(["d1", "d3", "d5", "d10"] as const).map((k) => (
+                                <td key={k} className={cn(numTd, color(e.perf[k]))}>{pct(e.perf[k])}</td>
+                              ))}
+                              <td className={cn(numTd, color(e.mfe))}>{pct(e.mfe)}</td>
+                              <td className={cn(numTd, color(e.mae))}>{pct(e.mae)}</td>
+                              <td className="px-2 py-2 text-xs text-muted-foreground">{e.mature ? "成熟" : "待成熟"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </GlassCard>

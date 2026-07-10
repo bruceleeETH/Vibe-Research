@@ -231,11 +231,14 @@ export interface ScanCandidate {
   pool_history: PoolHistoryItem[];
   score: number;
   factors: { trend: number; volume: number; fund: number; valuation: number; industry: number };
+  hit_streak: number;    // 连续命中天数（含今天，基于存档回看）
+  first_hit: boolean;    // 近 5 个存档日内首次命中
 }
 export interface ScanResult {
   generated_at: string; scanned: number;
   stale?: boolean;   // 缓存过期：本次返回旧数据，后端正在后台刷新
   market: string; pool: string; pool_note: string;
+  adaptive_note: string;   // 候选过载时的自适应门槛说明
   markets: { key: string; name: string }[];
   pools: { key: string; name: string }[];
   strategies: ScanStrategy[]; candidates: ScanCandidate[];
@@ -270,6 +273,16 @@ export interface ReviewStats {
 export interface PoolData {
   entries: PoolEntry[]; total: number; mature_count: number;
   tags: string[]; updated: string;
+}
+
+// 影子样本存档回看
+export interface SampleDaySummary { date: string; n: number; mature_n: number }
+export interface SampleEntry {
+  code: string; name: string; industry: string;
+  strategies: string[]; score: number | null;
+  amount: number | null; pct: number | null;
+  signal_close: number | null; next_open: number | null;
+  perf: PoolPerf; mfe: number | null; mae: number | null; mature: boolean;
 }
 
 // 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
@@ -337,6 +350,8 @@ export const api = {
     request<{ ok: boolean }>("/review/pool/tag", "POST", { id, tag, note }),
   reviewPoolRemove: (id: string) => request<{ ok: boolean }>(`/review/pool/${id}`, "DELETE"),
   reviewStats: () => get<ReviewStats>("/review/stats"),
+  reviewSampleDays: () => get<SampleDaySummary[]>("/review/samples/days"),
+  reviewSampleDay: (date: string) => get<SampleEntry[]>(`/review/samples/day?date=${date}`),
   reviewSamplesCapture: () => request<{ captured: number; note: string }>("/review/samples/capture", "POST"),
   reviewSamplesUpdate: () => request<{ updated: number }>("/review/samples/update", "POST"),
   myReports: () => get<MyReport[]>("/myreports"),

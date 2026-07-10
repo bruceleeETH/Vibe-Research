@@ -145,8 +145,46 @@ def capture_today(force: bool = False) -> dict:
 
     with _LOCK:
         _save_day(date, {"date": date, "generated_at": scan.get("generated_at", ""),
-                         "entries": entries})
+                         "entries": entries,
+                         # 全部候选的命中表（不止 topN）——「首次命中/连续命中」回看用
+                         "hits": {c["code"]: c["strategies"] for c in cands}})
     return {"captured": len(entries), "note": ""}
+
+
+def recent_hits(days: int = 5, before: str | None = None) -> list[tuple[str, dict]]:
+    """最近 N 个存档日的命中表 [(date, {code: [strategies]})]，新→旧，不含 before（默认今天）。
+
+    旧存档没有 hits 字段时降级用 entries（topN 近似）。
+    """
+    before = before or _today()
+    out: list[tuple[str, dict]] = []
+    for d in reversed(_list_days()):
+        if d >= before:
+            continue
+        data = _load_day(d)
+        if data:
+            hits = data.get("hits") or {e["code"]: e.get("strategies", []) for e in data.get("entries", [])}
+            out.append((d, hits))
+        if len(out) >= days:
+            break
+    return out
+
+
+def day_summaries() -> list[dict]:
+    """存档日概览（新→旧）：日期 / 样本数 / 成熟数。"""
+    out = []
+    for d in reversed(_list_days()):
+        data = _load_day(d)
+        if data:
+            es = data.get("entries", [])
+            out.append({"date": d, "n": len(es), "mature_n": sum(1 for e in es if e.get("mature"))})
+    return out
+
+
+def day_entries(date: str) -> list[dict]:
+    """某个存档日的样本明细（新→旧按成交额）。"""
+    data = _load_day(date)
+    return sorted(data.get("entries", []), key=lambda e: -(e.get("amount") or 0)) if data else []
 
 
 # ---------------------------------------------------------------------------

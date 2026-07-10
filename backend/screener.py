@@ -167,6 +167,7 @@ _POOL_CACHE: dict = {}  # {pool: (date_str, set[str])}
 # push2delay 会把页长钳到 100 —— 故按顺序探测，拿不全再降级分页。
 _HOSTS = ("82.push2.eastmoney.com", "push2.eastmoney.com", "push2delay.eastmoney.com")
 _MAX_PAGES = 60          # 分页兜底上限（100/页 × 60 ≈ 覆盖全 A）
+MAX_CANDIDATES = 150     # 候选上限：超过则自适应上调流动性门槛（见 _do_scan）
 _PAGE_INTERVAL = 0.3     # clist 分页限流间隔（行情中心低敏；数据中心接口仍走默认 1s）
 
 
@@ -498,6 +499,36 @@ def _do_scan(market: str, pool: str, force: bool = False) -> dict:
         candidates.append(r2)
     candidates.sort(key=lambda x: -(x["amount"] or 0))
 
+    # 候选过载自适应：超过上限时逐级上调流动性门槛重筛（客观、透明，meta 里说明）
+    raw_count = len(candidates)
+    adaptive_note = ""
+    if raw_count > MAX_CANDIDATES:
+        trimmed = candidates
+        floor = floors[0]
+        for mult in (1.5, 2, 3, 4, 6, 8):
+            floor = floors[0] * mult
+            trimmed = [c for c in candidates if (c["amount"] or 0) >= floor]
+            if len(trimmed) <= MAX_CANDIDATES:
+                break
+        candidates = trimmed
+        adaptive_note = f"候选过载：流动性门槛自动上调至成交额 {floor / 1e8:.1f} 亿（{raw_count} → {len(candidates)} 只）"
+
+    # 首次命中 / 连续命中：回看最近 5 个存档日（影子样本层的每日命中表）
+    try:
+        import samples
+        hist = samples.recent_hits(5)
+    except Exception:
+        hist = []
+    for c in candidates:
+        streak = 0
+        for _, day_hits in hist:            # 新→旧，遇到断档即停 → 连续天数
+            if c["code"] in day_hits:
+                streak += 1
+            else:
+                break
+        c["hit_streak"] = streak + 1        # 含今天
+        c["first_hit"] = not any(c["code"] in h for _, h in hist)
+
     # 资金字段兜底：行情快照里全空（上游对该组合字段间歇置空）时，独立按 f62 补拉一次
     if candidates and all(c["main_net"] is None for c in candidates):
         try:
@@ -530,6 +561,7 @@ def _do_scan(market: str, pool: str, force: bool = False) -> dict:
         "market": market,
         "pool": pool,
         "pool_note": pool_note,
+        "adaptive_note": adaptive_note,
         "markets": [{"key": k, "name": v["name"]} for k, v in MARKETS.items()],
         "pools": [{"key": k, "name": v} for k, v in POOLS.items()],
         "strategies": [dict(s, count=counts[s["key"]]) for s in STRATEGIES],

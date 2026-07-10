@@ -700,6 +700,24 @@ def review_samples_capture():
         raise HTTPException(502, f"样本存档异常：{e}") from e
 
 
+@app.get("/api/review/samples/days")
+def review_sample_days():
+    """存档日概览：日期 / 样本数 / 成熟数（新→旧）。"""
+    try:
+        return {"data": samples.day_summaries()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"存档列表异常：{e}") from e
+
+
+@app.get("/api/review/samples/day")
+def review_sample_day(date: str = Query(..., min_length=10, max_length=10)):
+    """某个存档日的样本明细（当日候选按成交额排序）。"""
+    try:
+        return {"data": samples.day_entries(date)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"存档读取异常：{e}") from e
+
+
 @app.post("/api/review/samples/update")
 def review_samples_update():
     """手动触发未成熟样本收益更新。"""

@@ -67,6 +67,7 @@ def scan_isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(screener, "industry_strength", lambda: {})
     monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))
     monkeypatch.setattr(screener, "_SCAN_CACHE_FILE", str(tmp_path / "scancache.json"))
+    monkeypatch.setattr(sp, "recent_hits", lambda days=5, before=None: [])
     screener._CACHE.clear()
     return monkeypatch
 
@@ -208,6 +209,50 @@ def test_open_pct():
     assert screener._open_pct(9.5, 10.0) == -5.0
     assert screener._open_pct(None, 10.0) is None
     assert screener._open_pct(0.0, 10.0) is None    # 停牌开盘 0 → None
+
+
+def test_scan_hit_streak_and_first_hit(scan_isolated):
+    snapshot = [
+        _row(code="600001", name="连续股", pct=5, vol_ratio=1.5, turnover=4, amount=3e8),
+        _row(code="600002", name="首次股", pct=5, vol_ratio=1.5, turnover=4, amount=3e8),
+        _row(code="600003", name="断续股", pct=5, vol_ratio=1.5, turnover=4, amount=3e8),
+    ]
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: snapshot)
+    # 存档回看（新→旧）：600001 连续两日；600003 前日有、昨日无（断档）
+    scan_isolated.setattr(sp, "recent_hits", lambda days=5, before=None: [
+        ("2026-07-10", {"600001": ["volume_surge"]}),
+        ("2026-07-09", {"600001": ["volume_surge"], "600003": ["high_turnover"]}),
+    ])
+    by_code = {c["code"]: c for c in screener.scan(force=True)["candidates"]}
+    assert by_code["600001"]["hit_streak"] == 3 and not by_code["600001"]["first_hit"]
+    assert by_code["600002"]["hit_streak"] == 1 and by_code["600002"]["first_hit"]
+    assert by_code["600003"]["hit_streak"] == 1 and not by_code["600003"]["first_hit"]  # 断档但5日内出现过
+
+
+def test_scan_adaptive_floor(scan_isolated):
+    # 200 只命中放量上涨，成交额 2.1亿~22亿 → 过载触发流动性门槛上调
+    snapshot = [_row(code=f"60{i:04d}", name=f"股{i}", pct=5, vol_ratio=1.5, turnover=4,
+                     amount=2.1e8 + i * 1e7) for i in range(200)]
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: snapshot)
+    out = screener.scan(force=True)
+    assert len(out["candidates"]) <= screener.MAX_CANDIDATES
+    assert "流动性门槛" in out["adaptive_note"]
+    # 留下的都是成交额头部
+    assert min((c["amount"] for c in out["candidates"])) >= 3e8
+
+
+def test_sample_day_browse(shadow, monkeypatch):
+    import os
+    os.makedirs(sp.SAMPLES_DIR, exist_ok=True)
+    sp._save_day("2026-06-01", {"date": "2026-06-01", "generated_at": "t", "entries": [
+        dict(_cand("600001", ["volume_surge"], 5e8), mature=True, perf={}),
+        dict(_cand("600002", ["high_turnover"], 9e8), mature=False, perf={}),
+    ]})
+    days = sp.day_summaries()
+    assert days == [{"date": "2026-06-01", "n": 2, "mature_n": 1}]
+    es = sp.day_entries("2026-06-01")
+    assert es[0]["code"] == "600002"          # 按成交额降序
+    assert sp.day_entries("2026-01-01") == []
 
 
 def test_match_strategies_market_floors():
@@ -534,13 +579,14 @@ def test_api_scan_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(screener, "industry_strength", lambda: {})
     monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))
     monkeypatch.setattr(screener, "_SCAN_CACHE_FILE", str(tmp_path / "scancache.json"))
+    monkeypatch.setattr(sp, "recent_hits", lambda days=5, before=None: [])
     screener._CACHE.clear()
     r = client.get("/api/review/scan?refresh=1")
     assert r.status_code == 200
     d = r.json()["data"]
     assert set(d) == {"generated_at", "scanned", "strategies", "candidates",
-                      "market", "pool", "pool_note", "markets", "pools"}
+                      "market", "pool", "pool_note", "adaptive_note", "markets", "pools"}
     c = d["candidates"][0]
     assert {"code", "name", "pct", "amount", "turnover", "vol_ratio", "pe_ttm",
             "industry", "strategies", "flags", "main_net", "super_net", "main_pct",
-            "pool_history", "score", "factors"} <= set(c)
+            "pool_history", "score", "factors", "hit_streak", "first_hit"} <= set(c)
