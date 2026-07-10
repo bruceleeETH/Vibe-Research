@@ -62,8 +62,9 @@ def test_objective_flags():
 
 @pytest.fixture()
 def scan_isolated(monkeypatch, tmp_path):
-    """scan 离线隔离：资金兜底与复盘池文件都不出网/不读真实缓存。"""
+    """scan 离线隔离：资金兜底/行业强度不出网，复盘池文件不读真实缓存。"""
     monkeypatch.setattr(screener, "fund_snapshot", lambda: {})
+    monkeypatch.setattr(screener, "industry_strength", lambda: {})
     monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))
     screener._CACHE.clear()
     return monkeypatch
@@ -133,6 +134,45 @@ def test_snapshot_paging_fallback(monkeypatch):
     rows = screener.market_snapshot()
     assert len(rows) == total                      # 3 页补齐、无重复
     assert rows[0]["code"] == "600000"
+
+
+# ---------------------------------------------------------------------------
+# 多因子评分（纯函数）
+# ---------------------------------------------------------------------------
+
+def test_pct_rank():
+    s = [1.0, 2.0, 3.0, 4.0]
+    assert screener._pct_rank(s, 4.0) == 100.0
+    assert screener._pct_rank(s, 2.0) == 50.0
+    assert screener._pct_rank(s, 0.5) == 0.0
+    assert screener._pct_rank([], 1.0) == 50.0      # 空序列 → 中性
+
+
+def test_attach_scores_shape_and_weights():
+    cands = [
+        _row(code="600001", pct=8, pct_60d=30, vol_ratio=3, turnover=10, main_pct=6, pe_ttm=20, industry="半导体"),
+        _row(code="600002", pct=4, pct_60d=5, vol_ratio=1.5, turnover=4, main_pct=-2, pe_ttm=45, industry="银行"),
+        _row(code="600003", pct=6, pct_60d=10, vol_ratio=2, turnover=6, main_pct=1, pe_ttm=-10, industry="AI"),
+    ]
+    screener.attach_scores(cands, {"半导体": 3.5, "银行": -0.5, "AI": 1.2})
+    for c in cands:
+        assert set(c["factors"]) == {"trend", "volume", "fund", "valuation", "industry"}
+        assert all(0 <= v <= 100 for v in c["factors"].values())
+        assert 0 <= c["score"] <= 100
+    # 全维度更强的 600001 综合分应最高；负 PE 的估值因子记 20
+    assert cands[0]["score"] > cands[1]["score"]
+    assert cands[2]["factors"]["valuation"] == 20
+    assert abs(sum(screener.FACTOR_WEIGHTS.values()) - 1.0) < 1e-9
+
+
+def test_attach_scores_missing_fields_neutral():
+    # 字段缺失（如资金字段全 null、行业不在强度表里）→ 因子取中性 50，不抛异常
+    cands = [{"code": "600001", "pct": None, "vol_ratio": None, "turnover": None,
+              "main_pct": None, "main_net": None, "pe_ttm": None, "industry": "冷门"}]
+    screener.attach_scores(cands, {})
+    f = cands[0]["factors"]
+    assert f["trend"] == 50 and f["volume"] == 50 and f["fund"] == 50 and f["industry"] == 50
+    assert f["valuation"] == 20                     # PE 缺失/非正按低分处理
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +294,7 @@ def test_api_scan_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(screener, "market_snapshot",
                         lambda: [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)])
     monkeypatch.setattr(screener, "fund_snapshot", lambda: {})
+    monkeypatch.setattr(screener, "industry_strength", lambda: {})
     monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))
     screener._CACHE.clear()
     r = client.get("/api/review/scan?refresh=1")
@@ -263,4 +304,4 @@ def test_api_scan_shape(monkeypatch, tmp_path):
     c = d["candidates"][0]
     assert {"code", "name", "pct", "amount", "turnover", "vol_ratio", "pe_ttm",
             "industry", "strategies", "flags", "main_net", "super_net", "main_pct",
-            "pool_history"} <= set(c)
+            "pool_history", "score", "factors"} <= set(c)

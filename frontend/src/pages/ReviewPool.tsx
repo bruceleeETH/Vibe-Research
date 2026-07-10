@@ -47,7 +47,15 @@ const VIEWS: { key: View; label: string }[] = [
 ];
 
 // 可点击排序的数值列
-type SortKey = "pct" | "amount" | "turnover" | "vol_ratio" | "pe_ttm" | "main_net";
+type SortKey = "score" | "pct" | "amount" | "turnover" | "vol_ratio" | "pe_ttm" | "main_net" | "mcap" | "pct_60d";
+
+const FACTOR_NAME: Record<string, string> = {
+  trend: "趋势", volume: "量能", fund: "资金", valuation: "估值", industry: "行业",
+};
+const factorText = (c: ScanCandidate) =>
+  Object.entries(c.factors || {}).map(([k, v]) => `${FACTOR_NAME[k]}${v}`).join(" · ");
+const scoreColor = (s: number) =>
+  s >= 80 ? "text-danger" : s >= 60 ? "text-primary" : "text-muted-foreground";
 
 export function ReviewPool() {
   const [tab, setTab] = useState<"scan" | "pool">("scan");
@@ -61,6 +69,7 @@ export function ReviewPool() {
   const [minAmount3, setMinAmount3] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortAsc, setSortAsc] = useState(false);
+  const [minScore, setMinScore] = useState(0);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [manualInput, setManualInput] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -96,8 +105,9 @@ export function ReviewPool() {
     if (strategy !== "all") rows = rows.filter((c) => c.strategies.includes(strategy));
     if (hideFlagged) rows = rows.filter((c) => c.flags.length === 0);
     if (minAmount3) rows = rows.filter((c) => (c.amount ?? 0) >= 3e8);
+    if (minScore > 0) rows = rows.filter((c) => (c.score ?? 0) >= minScore);
     return rows;
-  }, [scan, strategy, hideFlagged, minAmount3]);
+  }, [scan, strategy, hideFlagged, minAmount3, minScore]);
 
   // 排序：表头点击优先；否则按视角默认（皆为公开的客观键，null 沉底）
   const sorted = useMemo(() => {
@@ -108,7 +118,7 @@ export function ReviewPool() {
     } else if (view === "fund") {
       rows.sort((a, b) => nul(b.main_net) - nul(a.main_net));
     } else if (view === "rank") {
-      rows.sort((a, b) => b.strategies.length - a.strategies.length || (b.amount ?? 0) - (a.amount ?? 0));
+      rows.sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || (b.amount ?? 0) - (a.amount ?? 0));
     } // industry / review 维持成交额降序（后端序）
     return rows;
   }, [filtered, sortKey, sortAsc, view]);
@@ -208,7 +218,7 @@ export function ReviewPool() {
 
   // ---- AskAI 上下文：随视角切换喂当前投影（客观数据，结论由用户模型给出）----
   const candLine = (c: ScanCandidate) =>
-    `${c.name}(${c.code}) ${c.industry} 涨${pct(c.pct)} 成交${yi(c.amount)} 换手${c.turnover ?? "—"}% 量比${c.vol_ratio ?? "—"} PE${c.pe_ttm ?? "—"} 主力${fmtNet(c.main_net)} 命中[${c.strategies.map((s) => STRATEGY_NAME[s]).join("/")}]`;
+    `${c.name}(${c.code}) ${c.industry} 综合${c.score ?? "—"}分(${factorText(c)}) 涨${pct(c.pct)} 成交${yi(c.amount)} 换手${c.turnover ?? "—"}% 量比${c.vol_ratio ?? "—"} PE${c.pe_ttm ?? "—"} 主力${fmtNet(c.main_net)} 60日${pct(c.pct_60d)} 命中[${c.strategies.map((s) => STRATEGY_NAME[s]).join("/")}]`;
   const aiContext = useMemo(() => {
     if (tab === "pool") {
       const es = pool?.entries || [];
@@ -293,17 +303,31 @@ export function ReviewPool() {
   );
 
   // 综合排序 / 行业视角共用的明细行
+  // 综合分单元格：悬停显示五因子拆解
+  const ScoreCell = ({ c }: { c: ScanCandidate }) => (
+    <td className="px-2 py-2.5">
+      <span
+        className={cn("cursor-help font-mono text-base font-bold", scoreColor(c.score ?? 0))}
+        title={`因子拆解：${factorText(c)}（权重：趋势25 量能25 资金20 估值15 行业15）`}
+      >
+        {c.score ?? "—"}
+      </span>
+    </td>
+  );
   const DetailRow = ({ c, showIndustry = true }: { c: ScanCandidate; showIndustry?: boolean }) => (
     <tr className="border-b border-border/30">
       <NameCell c={c} />
       {showIndustry && <td className="max-w-32 truncate px-2 py-2.5 text-xs text-muted-foreground">{c.industry || "—"}</td>}
       <td className="px-2 py-2.5"><StrategyChips c={c} /></td>
+      <ScoreCell c={c} />
       <td className={cn("px-2 py-2.5 font-mono", color(c.pct))}>{pct(c.pct)}</td>
       <td className="px-2 py-2.5 font-mono text-muted-foreground">{yi(c.amount)}</td>
       <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.turnover ?? "—"}</td>
       <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.vol_ratio ?? "—"}</td>
       <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.pe_ttm ?? "—"}</td>
       <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.main_net))}>{fmtNet(c.main_net)}</td>
+      <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.pct_60d))}>{pct(c.pct_60d)}</td>
+      <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">{yi(c.mcap)}</td>
       <td className="px-2 py-2.5">
         {c.flags.map((f) => (
           <span key={f} className="mr-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-500">{f}</span>
@@ -317,12 +341,15 @@ export function ReviewPool() {
       <th className="whitespace-nowrap px-2 py-2 font-medium">名称</th>
       {showIndustry && <th className="whitespace-nowrap px-2 py-2 font-medium">行业</th>}
       <th className="whitespace-nowrap px-2 py-2 font-medium">命中策略</th>
+      <SortTh k="score" label="综合" />
       <SortTh k="pct" label="涨跌%" />
       <SortTh k="amount" label="成交额" />
       <SortTh k="turnover" label="换手%" />
       <SortTh k="vol_ratio" label="量比" />
       <SortTh k="pe_ttm" label="PE(TTM)" />
       <SortTh k="main_net" label="主力净额" />
+      <SortTh k="pct_60d" label="60日%" />
+      <SortTh k="mcap" label="市值" />
       <th className="whitespace-nowrap px-2 py-2 font-medium">提示</th>
       <th className="px-2 py-2" />
     </tr>
@@ -338,7 +365,7 @@ export function ReviewPool() {
     <div>
       <PageHeader
         title="复盘工作台"
-        subtitle="客观阈值硬筛候选 → 入池记录 → 1D/3D/5D/10D 真实表现回看。不评分、不推荐，标签手动标注，数据只存本地。"
+        subtitle="阈值硬筛候选 → 五因子综合分 → 入池记录 → 1D/3D/5D/10D 真实表现回看。个人复盘工具，评分算法公开可调，数据只存本地。"
         actions={<AskAiButton context={aiContext} label={tab === "pool" ? "让 AI 复盘" : "让 AI 读候选"} suggestions={aiSuggestions} />}
       />
 
@@ -424,6 +451,17 @@ export function ReviewPool() {
               <input type="checkbox" checked={minAmount3} onChange={(e) => setMinAmount3(e.target.checked)} />
               成交额＞3亿
             </label>
+            <select
+              value={minScore}
+              onChange={(e) => setMinScore(Number(e.target.value))}
+              className="rounded border border-border bg-transparent px-1.5 py-0.5 text-xs text-muted-foreground outline-none"
+              title="最低综合分"
+            >
+              <option value={0}>综合分不限</option>
+              <option value={60}>综合分≥60</option>
+              <option value={70}>综合分≥70</option>
+              <option value={80}>综合分≥80</option>
+            </select>
             <button
               onClick={() => loadScan(true)}
               disabled={scanLoading}
@@ -435,7 +473,7 @@ export function ReviewPool() {
           </div>
 
           <p className="mb-2 text-[11px] text-muted-foreground/70">
-            {view === "rank" && "默认按 命中策略数 → 成交额 排（客观多键，无评分）；点击任意数值列表头改排序。"}
+            {view === "rank" && "默认按综合分排序（五因子加权：趋势25 量能25 资金20 估值15 行业15，因子为候选集内百分位；悬停分数看拆解）；点击任意数值列表头改排序。"}
             {view === "industry" && "按行业分组：组头为候选数 / 合计成交额 / 平均涨幅 / 主力净额合计（客观聚合），按候选数排组。"}
             {view === "fund" && "按主力净额降序；资金条 = 该票主力净额在当前候选集内的相对比例（客观可视化，非评分）。"}
             {view === "review" && "只列今日候选中曾进过复盘池的票，附历次入池后的真实 1D/3D/5D/10D 表现（客观回放，不构成预测）。"}
@@ -494,6 +532,7 @@ export function ReviewPool() {
                     <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
                       <th className="whitespace-nowrap px-2 py-2 font-medium">名称</th>
                       <th className="whitespace-nowrap px-2 py-2 font-medium">行业</th>
+                      <SortTh k="score" label="综合" />
                       <SortTh k="main_net" label="主力净额" />
                       <th className="whitespace-nowrap px-2 py-2 font-medium">超大单</th>
                       <th className="whitespace-nowrap px-2 py-2 font-medium">净占比%</th>
@@ -509,6 +548,7 @@ export function ReviewPool() {
                       <tr key={c.code} className="border-b border-border/30">
                         <NameCell c={c} />
                         <td className="max-w-32 truncate px-2 py-2.5 text-xs text-muted-foreground">{c.industry || "—"}</td>
+                        <ScoreCell c={c} />
                         <td className={cn("px-2 py-2.5 font-mono", color(c.main_net))}>{fmtNet(c.main_net)}</td>
                         <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.super_net))}>{fmtNet(c.super_net)}</td>
                         <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.main_pct))}>{c.main_pct == null ? "—" : `${c.main_pct}%`}</td>

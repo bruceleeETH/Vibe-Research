@@ -75,7 +75,8 @@ def objective_flags(r: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 # f62 主力净额 / f66 超大单净额 / f184 主力净占比% —— 随行情快照一并取（同一 clist 接口族）
-_SNAPSHOT_FIELDS = "f12,f14,f2,f3,f6,f8,f9,f10,f20,f23,f100,f115,f62,f66,f184"
+# f24 60日涨跌幅 / f25 年初至今涨跌幅 —— 趋势因子用
+_SNAPSHOT_FIELDS = "f12,f14,f2,f3,f6,f8,f9,f10,f20,f23,f24,f25,f100,f115,f62,f66,f184"
 _FUND_FIELDS = "f12,f62,f66,f184"
 _SNAPSHOT_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
 # 编号主机（akshare 同款）通常接受大分页一次拿全；裸 push2 对大 pz 可能直接断连，
@@ -96,6 +97,7 @@ def _norm(d: dict) -> dict:
         "mcap": nf(d.get("f20")), "industry": str(d.get("f100", "") or ""),
         "main_net": nf(d.get("f62")), "super_net": nf(d.get("f66")),
         "main_pct": nf(d.get("f184")),
+        "pct_60d": nf(d.get("f24")), "pct_ytd": nf(d.get("f25")),
     }
 
 
@@ -175,6 +177,90 @@ def fund_snapshot() -> dict[str, dict]:
     }
 
 
+# ---------------------------------------------------------------------------
+# 多因子拆解 + 加权综合分（个人复盘用；权重与算法全部公开在此，可按偏好调整）
+#
+# 每个因子先在【当前候选集内】做百分位归一（0-100），再按权重加权合成综合分。
+# 百分位相对候选集而非全市场：候选本身已过硬筛，比较的是"入选者之间谁更突出"。
+# ---------------------------------------------------------------------------
+
+FACTOR_WEIGHTS = {
+    "trend": 0.25,      # 趋势：当日涨幅 70% + 60日涨幅 30%
+    "volume": 0.25,     # 量能：量比 50% + 换手 50%
+    "fund": 0.20,       # 资金：主力净占比（缺失时用主力净额）
+    "valuation": 0.15,  # 估值：PE 越低分越高（负 PE 记 20 分）
+    "industry": 0.15,   # 行业：所属行业当日涨幅在全行业中的分位
+}
+
+
+def _pct_rank(sorted_vals: list[float], v: float) -> float:
+    """v 在升序序列中的百分位（0-100）。空序列返回 50（中性）。"""
+    if not sorted_vals:
+        return 50.0
+    below = 0
+    for x in sorted_vals:
+        if x <= v:
+            below += 1
+        else:
+            break
+    return below / len(sorted_vals) * 100
+
+
+def industry_strength() -> dict[str, float]:
+    """全行业当日涨幅 {行业名: 涨跌幅%}（东财行业板块，行业因子用）。失败返回 {}。"""
+    try:
+        data = astock.industry_comparison(top_n=100)
+        rows = (data.get("top") or []) + (data.get("bottom") or [])
+        return {r["name"]: float(r["change_pct"] or 0) for r in rows if r.get("name")}
+    except Exception:
+        return {}
+
+
+def attach_scores(candidates: list[dict], ind_pct: dict[str, float]) -> None:
+    """就地给每个候选加 factors（五因子 0-100）与 score（加权综合，0-100）。"""
+    if not candidates:
+        return
+
+    def _series(fn) -> list[float]:
+        return sorted(v for c in candidates if (v := fn(c)) is not None)
+
+    trend_raw = lambda c: None if c.get("pct") is None else (c["pct"] * 0.7 + (c.get("pct_60d") or 0) * 0.3)
+    vr_s = _series(lambda c: c.get("vol_ratio"))
+    to_s = _series(lambda c: c.get("turnover"))
+    tr_s = _series(trend_raw)
+    fp_s = _series(lambda c: c.get("main_pct"))
+    fn_s = _series(lambda c: c.get("main_net"))
+    pe_s = _series(lambda c: c.get("pe_ttm") if (c.get("pe_ttm") or 0) > 0 else None)
+    ind_s = sorted(ind_pct.values())
+
+    for c in candidates:
+        tr = trend_raw(c)
+        trend = _pct_rank(tr_s, tr) if tr is not None else 50.0
+        vol_parts = [
+            _pct_rank(vr_s, c["vol_ratio"]) if c.get("vol_ratio") is not None else None,
+            _pct_rank(to_s, c["turnover"]) if c.get("turnover") is not None else None,
+        ]
+        vol_parts = [p for p in vol_parts if p is not None]
+        volume = sum(vol_parts) / len(vol_parts) if vol_parts else 50.0
+        if c.get("main_pct") is not None:
+            fund = _pct_rank(fp_s, c["main_pct"])
+        elif c.get("main_net") is not None:
+            fund = _pct_rank(fn_s, c["main_net"])
+        else:
+            fund = 50.0
+        pe = c.get("pe_ttm")
+        valuation = 20.0 if (pe is None or pe <= 0) else 100 - _pct_rank(pe_s, pe)
+        ind = ind_pct.get(c.get("industry") or "")
+        industry = _pct_rank(ind_s, ind) if ind is not None else 50.0
+
+        factors = {
+            "trend": round(trend), "volume": round(volume), "fund": round(fund),
+            "valuation": round(valuation), "industry": round(industry),
+        }
+        c["factors"] = factors
+        c["score"] = round(sum(factors[k] * w for k, w in FACTOR_WEIGHTS.items()))
+
+
 def scan(force: bool = False) -> dict:
     """扫描全市场 → 候选清单（命中任一策略即入选，成交额降序的客观排序）。
 
@@ -219,6 +305,9 @@ def scan(force: bool = False) -> dict:
         history = {}
     for c in candidates:
         c["pool_history"] = history.get(c["code"], [])
+
+    # 多因子拆解 + 综合分（个人复盘用，权重见 FACTOR_WEIGHTS）
+    attach_scores(candidates, industry_strength())
 
     counts = {s["key"]: 0 for s in STRATEGIES}
     for c in candidates:

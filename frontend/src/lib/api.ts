@@ -225,8 +225,11 @@ export interface ScanCandidate {
   pe_ttm: number | null; pe_dyn: number | null; pb: number | null;
   mcap: number | null; industry: string;
   main_net: number | null; super_net: number | null; main_pct: number | null;
+  pct_60d: number | null; pct_ytd: number | null;
   strategies: string[]; flags: string[];
   pool_history: PoolHistoryItem[];
+  score: number;
+  factors: { trend: number; volume: number; fund: number; valuation: number; industry: number };
 }
 export interface ScanResult {
   generated_at: string; scanned: number;
