@@ -25,6 +25,8 @@ import newsradar
 import portfolio as pf
 import market
 import myreports as mr
+import reviewpool as rp
+import screener
 
 app = FastAPI(title="Vibe-Research API", version="0.1.1")
 
@@ -584,6 +586,78 @@ def investor_qa(code: str = Query(...)):
         return {"data": _cached("irm", code, 900, lambda: astock.investor_qa(code))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"互动易异常：{e}") from e
+
+
+# ---------------------------------------------------------------------------
+# 复盘工作台：候选扫描（客观阈值硬筛，不评分）+ 复盘池（本地存储，1D/3D/5D/10D 客观回看）
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/review/scan")
+def review_scan(refresh: int = Query(0, ge=0, le=1)):
+    """全市场扫描 → 策略候选清单（客观阈值规则命中，成交额降序；不评分、不推荐）。缓存 5 分钟。"""
+    try:
+        return {"data": screener.scan(force=bool(refresh))}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"候选扫描异常：{e}") from e
+
+
+class PoolItemIn(BaseModel):
+    code: str
+    strategies: list[str] = []
+
+
+class PoolAddIn(BaseModel):
+    items: list[PoolItemIn]
+
+
+@app.get("/api/review/pool")
+def review_pool(refresh: int = Query(0, ge=0, le=1)):
+    """复盘池：入池记录 + 当前价 + 1D/3D/5D/10D 收益回看（满 10D 成熟锁定）。"""
+    try:
+        return {"data": rp.get_pool(refresh=bool(refresh))}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"复盘池读取异常：{e}") from e
+
+
+@app.post("/api/review/pool")
+def review_pool_add(body: PoolAddIn):
+    """批量入池（候选一键入池 / 手输代码）。入池价=当前价，同代码同日去重。存本地。"""
+    items = []
+    for it in body.items:
+        code = (it.code or "").strip()
+        if not code.isdigit() or len(code) != 6:
+            raise HTTPException(400, f"代码必须是 6 位数字：{it.code}")
+        items.append({"code": code, "strategies": it.strategies})
+    if not items:
+        raise HTTPException(400, "items 不能为空")
+    try:
+        return {"data": rp.add_batch(items)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"入池失败：{e}") from e
+
+
+class PoolTagIn(BaseModel):
+    id: str
+    tag: str = ""
+    note: str = ""
+
+
+@app.post("/api/review/pool/tag")
+def review_pool_tag(body: PoolTagIn):
+    """更新某条入池记录的手动标签 / 备注。"""
+    if body.tag and body.tag not in rp.TAGS:
+        raise HTTPException(400, f"标签只能是 {rp.TAGS} 之一或留空")
+    if not rp.update_tag(body.id, body.tag, body.note):
+        raise HTTPException(404, "记录不存在")
+    return {"data": {"ok": True}}
+
+
+@app.delete("/api/review/pool/{eid}")
+def review_pool_remove(eid: str):
+    if not rp.remove(eid):
+        raise HTTPException(404, "记录不存在")
+    return {"data": {"ok": True}}
 
 
 @app.get("/api/industry")

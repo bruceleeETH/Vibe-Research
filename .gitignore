@@ -35,3 +35,6 @@ frontend/tsconfig.tsbuildinfo
 *.log
 .vscode/
 .idea/
+
+# 本地参考资料（不进仓库）
+newinfo710/

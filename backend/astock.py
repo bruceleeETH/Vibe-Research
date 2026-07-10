@@ -94,6 +94,34 @@ def tencent_quote(codes: list[str]) -> dict[str, dict]:
     return _parse_gtimg(_fetch_gtimg(prefixed))
 
 
+def tencent_daily_kline(code: str, count: int = 30) -> list[dict]:
+    """腾讯日K（前复权，仅标准库、无限流）：[{date, open, close, high, low, volume}, ...] 升序。
+
+    复盘池 1D/3D/5D/10D 收益跟踪用——按入池日之后的真实收盘价客观回看，不预测。
+    """
+    import json as _json
+
+    symbol = f"{get_prefix(code)}{code}"
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,{count},qfq"
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        d = _json.loads(resp.read().decode("utf-8"))
+    node = (d.get("data") or {}).get(symbol) or {}
+    rows = node.get("qfqday") or node.get("day") or []
+    out = []
+    for r in rows:
+        if not isinstance(r, list) or len(r) < 6:
+            continue
+        try:
+            out.append({
+                "date": str(r[0]), "open": float(r[1]), "close": float(r[2]),
+                "high": float(r[3]), "low": float(r[4]), "volume": float(r[5]),
+            })
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 # A股大盘指数（前缀规则与个股不同，固定带前缀代码）
 A_INDICES = ["sh000001", "sz399001", "sz399006", "sh000300"]
 
@@ -464,15 +492,19 @@ def _em_session(direct: bool):
     return s
 
 
-def em_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15):
+def em_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15,
+           min_interval: float | None = None):
     """东财统一请求入口：串行限流 + **直连优先、失败降级系统代理**（避免科学上网代理挂掉国内站）。
 
     第一次请求探测：先直连（短超时、不重试），成功即固定走直连；失败则降级走系统代理并固定。
     探测结果整个进程复用，避免每次重试。`VR_DATA_PROXY=1` 可跳过探测、强制走代理。
+    min_interval 可覆盖默认限流间隔（行情中心 clist 分页等低敏场景可调小；数据中心接口勿动）。
     """
-    wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
+    interval = _EM_MIN_INTERVAL if min_interval is None else min_interval
+    wait = interval - (time.time() - _em_last_call[0])
     if wait > 0:
-        time.sleep(wait + random.uniform(0.1, 0.5))
+        # 抖动随限流间隔等比缩放：clist 分页用小间隔时不至于被 0.1-0.5s 固定抖动拖慢
+        time.sleep(wait + random.uniform(0.1, 0.5) * min(interval / _EM_MIN_INTERVAL, 1.0))
     try:
         mode = _em_mode[0]
         if mode != "auto":

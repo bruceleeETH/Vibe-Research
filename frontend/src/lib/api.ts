@@ -212,6 +212,33 @@ export interface QaRow { company: string; question: string; answer: string | nul
 export interface IndustryRow { rank: number; name: string; change_pct: number; code: string; up_count: number; down_count: number }
 export interface IndustryData { top: IndustryRow[]; bottom: IndustryRow[]; total: number }
 
+// 复盘工作台：候选扫描（客观阈值硬筛，不评分）+ 复盘池（1D/3D/5D/10D 客观回看）
+export interface ScanStrategy { key: string; name: string; desc: string; count: number }
+export interface ScanCandidate {
+  code: string; name: string;
+  price: number | null; pct: number | null; amount: number | null;
+  turnover: number | null; vol_ratio: number | null;
+  pe_ttm: number | null; pe_dyn: number | null; pb: number | null;
+  mcap: number | null; industry: string;
+  strategies: string[]; flags: string[];
+}
+export interface ScanResult {
+  generated_at: string; scanned: number;
+  strategies: ScanStrategy[]; candidates: ScanCandidate[];
+}
+export interface PoolPerf { d1: number | null; d3: number | null; d5: number | null; d10: number | null }
+export interface PoolEntry {
+  id: string; code: string; name: string;
+  entry_date: string; entry_price: number;
+  strategies: string[]; tag: string; note: string;
+  perf: PoolPerf; mature: boolean;
+  price: number | null; change_pct: number | null; status: string;
+}
+export interface PoolData {
+  entries: PoolEntry[]; total: number; mature_count: number;
+  tags: string[]; updated: string;
+}
+
 // 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
 export interface GlobalIndex {
   key: string; name: string; region: string;
@@ -268,6 +295,13 @@ export const api = {
   hotConcepts: (code: string) => get<HotConcept[]>(`/hot-concepts?code=${code}`),
   investorQa: (code: string) => get<QaRow[]>(`/investor-qa?code=${code}`),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
+  reviewScan: (refresh = false) => get<ScanResult>(`/review/scan?refresh=${refresh ? 1 : 0}`),
+  reviewPool: (refresh = false) => get<PoolData>(`/review/pool?refresh=${refresh ? 1 : 0}`),
+  reviewPoolAdd: (items: { code: string; strategies?: string[] }[]) =>
+    request<{ added: number }>("/review/pool", "POST", { items }),
+  reviewPoolTag: (id: string, tag: string, note: string) =>
+    request<{ ok: boolean }>("/review/pool/tag", "POST", { id, tag, note }),
+  reviewPoolRemove: (id: string) => request<{ ok: boolean }>(`/review/pool/${id}`, "DELETE"),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string) =>
     request<MyReport>("/myreports", "POST", { name, content_b64: contentB64 }),

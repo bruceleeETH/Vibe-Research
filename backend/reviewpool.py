@@ -1,0 +1,197 @@
+"""复盘工作台 · 复盘池数据层 —— 入池记录 + 1D/3D/5D/10D 收益客观回看。
+
+合规：入池标的由用户主动添加（候选一键入池或手输代码），标签（重点关注/
+观察/谨慎/备选）由用户手动标注；1D/3D/5D/10D 为入池后**真实收盘价的客观
+回看**（复盘），不预测、不评分。数据只存本地 .cache/reviewpool.json
+（gitignore、不上传、不进仓库），同持仓模块口径。
+
+收益口径：dN = 入池日之后第 N 个**交易日**收盘价 / 入池价 - 1。
+满 10D 记为「成熟」，成熟样本的收益锁定缓存、不再重拉行情。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+import uuid
+from datetime import datetime, timezone, timedelta
+
+import astock
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CACHE_DIR = os.path.join(HERE, ".cache")
+POOL_FILE = os.path.join(CACHE_DIR, "reviewpool.json")
+BEIJING = timezone(timedelta(hours=8))
+_LOCK = threading.Lock()
+
+TAGS = ["重点关注", "观察", "备选", "谨慎"]  # 用户手动标签（无默认、无自动评级）
+
+
+def _today() -> str:
+    return datetime.now(BEIJING).strftime("%Y-%m-%d")
+
+
+def _now() -> str:
+    return datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M")
+
+
+def _load() -> dict:
+    try:
+        with open(POOL_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"entries": []}
+
+
+def _save(d: dict) -> None:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    tmp = POOL_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False)
+    os.replace(tmp, POOL_FILE)
+
+
+# ---------------------------------------------------------------------------
+# 收益计算（纯函数，可单测）
+# ---------------------------------------------------------------------------
+
+def calc_perf(entry_price: float, closes_after: list[float]) -> dict:
+    """入池价 + 入池日之后的收盘序列 → {d1, d3, d5, d10}（百分比，不足天数为 None）。"""
+    def _pct(n: int):
+        if entry_price and len(closes_after) >= n:
+            return round((closes_after[n - 1] / entry_price - 1) * 100, 2)
+        return None
+    return {"d1": _pct(1), "d3": _pct(3), "d5": _pct(5), "d10": _pct(10)}
+
+
+def _closes_after(code: str, entry_date: str) -> list[float]:
+    """入池日之后（严格大于 entry_date）的日收盘序列，升序。取不到返回 []。"""
+    try:
+        bars = astock.tencent_daily_kline(code, count=30)
+    except Exception:
+        return []
+    return [b["close"] for b in bars if b["date"] > entry_date]
+
+
+# ---------------------------------------------------------------------------
+# 池操作
+# ---------------------------------------------------------------------------
+
+def add_batch(items: list[dict]) -> dict:
+    """批量入池：[{code, strategies?}]。入池价=当前价（腾讯行情）；同代码同日去重。"""
+    codes = [it["code"] for it in items]
+    try:
+        quotes = astock.tencent_quote(codes) if codes else {}
+    except Exception:
+        quotes = {}
+    today = _today()
+    with _LOCK:
+        d = _load()
+        existing = {(e["code"], e["entry_date"]) for e in d["entries"]}
+        added = 0
+        for it in items:
+            code = (it.get("code") or "").strip()
+            if not code or (code, today) in existing:
+                continue
+            q = quotes.get(code, {})
+            price = q.get("price") or 0.0
+            d["entries"].append({
+                "id": uuid.uuid4().hex[:12],
+                "code": code,
+                "name": q.get("name", code),
+                "entry_date": today,
+                "entry_price": price,
+                "strategies": list(it.get("strategies") or []),
+                "tag": "",          # 用户手动标注，无默认
+                "note": "",
+                "added": _now(),
+                "perf": {"d1": None, "d3": None, "d5": None, "d10": None},
+                "mature": False,
+                "perf_asof": "",
+            })
+            existing.add((code, today))
+            added += 1
+        _save(d)
+    return {"added": added}
+
+
+def update_tag(eid: str, tag: str, note: str) -> bool:
+    with _LOCK:
+        d = _load()
+        for e in d["entries"]:
+            if e["id"] == eid:
+                e["tag"] = tag if tag in TAGS or tag == "" else e["tag"]
+                e["note"] = note
+                _save(d)
+                return True
+    return False
+
+
+def remove(eid: str) -> bool:
+    with _LOCK:
+        d = _load()
+        before = len(d["entries"])
+        d["entries"] = [e for e in d["entries"] if e["id"] != eid]
+        if len(d["entries"]) != before:
+            _save(d)
+            return True
+    return False
+
+
+def get_pool(refresh: bool = False) -> dict:
+    """读复盘池：当前价批量刷新 + 未成熟样本按日更新 1D/3D/5D/10D。
+
+    成熟（满 10D）样本收益已锁定，不再重拉 K 线；未成熟样本每天只算一次
+    （perf_asof 记账），refresh=True 强制重算当日。
+    """
+    with _LOCK:
+        d = _load()
+    entries = d.get("entries", [])
+
+    # 当前价：一次批量请求
+    quotes: dict = {}
+    if entries:
+        try:
+            quotes = astock.tencent_quote(sorted({e["code"] for e in entries}))
+        except Exception:
+            quotes = {}
+
+    today = _today()
+    dirty = False
+    for e in entries:
+        if e.get("mature"):
+            continue
+        if not refresh and e.get("perf_asof") == today:
+            continue
+        closes = _closes_after(e["code"], e["entry_date"])
+        if not closes and not refresh:
+            continue  # 行情源暂不可用：保留旧值，明天再试
+        e["perf"] = calc_perf(e["entry_price"], closes)
+        e["mature"] = e["perf"]["d10"] is not None
+        e["perf_asof"] = today
+        dirty = True
+    if dirty:
+        with _LOCK:
+            cur = _load()
+            by_id = {e["id"]: e for e in entries}
+            cur["entries"] = [by_id.get(e["id"], e) for e in cur.get("entries", [])]
+            _save(cur)
+
+    rows = []
+    for e in sorted(entries, key=lambda x: (x["entry_date"], x["added"]), reverse=True):
+        q = quotes.get(e["code"], {})
+        rows.append({
+            **{k: e[k] for k in ("id", "code", "name", "entry_date", "entry_price",
+                                 "strategies", "tag", "note", "perf", "mature")},
+            "price": q.get("price"),
+            "change_pct": q.get("change_pct"),
+            "status": "成熟" if e.get("mature") else "待成熟",
+        })
+    return {
+        "entries": rows,
+        "total": len(rows),
+        "mature_count": sum(1 for r in rows if r["mature"]),
+        "tags": TAGS,
+        "updated": _now(),
+    }
