@@ -219,7 +219,7 @@ export interface PoolHistoryItem {
   perf: PoolPerf; mature: boolean; tag: string;
 }
 export interface ScanCandidate {
-  code: string; name: string;
+  code: string; name: string; secid: string; market: string;
   price: number | null; pct: number | null; amount: number | null;
   turnover: number | null; vol_ratio: number | null;
   pe_ttm: number | null; pe_dyn: number | null; pb: number | null;
@@ -233,11 +233,14 @@ export interface ScanCandidate {
 }
 export interface ScanResult {
   generated_at: string; scanned: number;
+  market: string; pool: string; pool_note: string;
+  markets: { key: string; name: string }[];
+  pools: { key: string; name: string }[];
   strategies: ScanStrategy[]; candidates: ScanCandidate[];
 }
 export interface PoolPerf { d1: number | null; d3: number | null; d5: number | null; d10: number | null }
 export interface PoolEntry {
-  id: string; code: string; name: string;
+  id: string; code: string; name: string; market: string;
   entry_date: string; entry_price: number;
   strategies: string[]; tag: string; note: string;
   perf: PoolPerf; mature: boolean;
@@ -304,9 +307,10 @@ export const api = {
   hotConcepts: (code: string) => get<HotConcept[]>(`/hot-concepts?code=${code}`),
   investorQa: (code: string) => get<QaRow[]>(`/investor-qa?code=${code}`),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
-  reviewScan: (refresh = false) => get<ScanResult>(`/review/scan?refresh=${refresh ? 1 : 0}`),
+  reviewScan: (market = "A", pool = "all", refresh = false) =>
+    get<ScanResult>(`/review/scan?market=${market}&pool=${pool}&refresh=${refresh ? 1 : 0}`),
   reviewPool: (refresh = false) => get<PoolData>(`/review/pool?refresh=${refresh ? 1 : 0}`),
-  reviewPoolAdd: (items: { code: string; strategies?: string[] }[]) =>
+  reviewPoolAdd: (items: { code: string; name?: string; price?: number | null; secid?: string; market?: string; strategies?: string[] }[]) =>
     request<{ added: number }>("/review/pool", "POST", { items }),
   reviewPoolTag: (id: string, tag: string, note: string) =>
     request<{ ok: boolean }>("/review/pool/tag", "POST", { id, tag, note }),

@@ -65,10 +65,21 @@ def calc_perf(entry_price: float, closes_after: list[float]) -> dict:
     return {"d1": _pct(1), "d3": _pct(3), "d5": _pct(5), "d10": _pct(10)}
 
 
-def _closes_after(code: str, entry_date: str) -> list[float]:
-    """入池日之后（严格大于 entry_date）的日收盘序列，升序。取不到返回 []。"""
+def _default_secid(code: str) -> str:
+    """6 位 A 股/ETF 代码 → 东财 secid（5/6/9 开头沪市，其余深市）。"""
+    return f"{'1' if code[:1] in ('5', '6', '9') else '0'}.{code}"
+
+
+def _closes_after(code: str, entry_date: str, secid: str = "", market: str = "A") -> list[float]:
+    """入池日之后（严格大于 entry_date）的日收盘序列，升序。取不到返回 []。
+
+    A 股个股走腾讯日K（无限流）；ETF / 港股 / 美股走东财通用日K（secid）。
+    """
     try:
-        bars = astock.tencent_daily_kline(code, count=30)
+        if market == "A" and len(code) == 6 and code.isdigit():
+            bars = astock.tencent_daily_kline(code, count=30)
+        else:
+            bars = astock.em_daily_kline(secid or _default_secid(code), count=30)
     except Exception:
         return []
     return [b["close"] for b in bars if b["date"] > entry_date]
@@ -79,10 +90,15 @@ def _closes_after(code: str, entry_date: str) -> list[float]:
 # ---------------------------------------------------------------------------
 
 def add_batch(items: list[dict]) -> dict:
-    """批量入池：[{code, strategies?}]。入池价=当前价（腾讯行情）；同代码同日去重。"""
-    codes = [it["code"] for it in items]
+    """批量入池：[{code, name?, price?, secid?, market?, strategies?}]。
+
+    入池价优先用扫描行带来的 price（多市场通用）；A 股手输缺价时兜底腾讯行情。
+    同代码同日去重。
+    """
+    need_quote = [it["code"] for it in items
+                  if not it.get("price") and len(str(it.get("code", ""))) == 6 and str(it.get("code", "")).isdigit()]
     try:
-        quotes = astock.tencent_quote(codes) if codes else {}
+        quotes = astock.tencent_quote(need_quote) if need_quote else {}
     except Exception:
         quotes = {}
     today = _today()
@@ -91,15 +107,19 @@ def add_batch(items: list[dict]) -> dict:
         existing = {(e["code"], e["entry_date"]) for e in d["entries"]}
         added = 0
         for it in items:
-            code = (it.get("code") or "").strip()
+            code = str(it.get("code") or "").strip()
             if not code or (code, today) in existing:
                 continue
             q = quotes.get(code, {})
-            price = q.get("price") or 0.0
+            price = it.get("price") or q.get("price") or 0.0
+            name = it.get("name") or q.get("name") or code
+            market = it.get("market") or "A"
             d["entries"].append({
                 "id": uuid.uuid4().hex[:12],
                 "code": code,
-                "name": q.get("name", code),
+                "name": name,
+                "market": market,
+                "secid": it.get("secid") or (_default_secid(code) if code.isdigit() and len(code) == 6 else ""),
                 "entry_date": today,
                 "entry_price": price,
                 "strategies": list(it.get("strategies") or []),
@@ -109,6 +129,7 @@ def add_batch(items: list[dict]) -> dict:
                 "perf": {"d1": None, "d3": None, "d5": None, "d10": None},
                 "mature": False,
                 "perf_asof": "",
+                "last_close": None,
             })
             existing.add((code, today))
             added += 1
@@ -169,11 +190,12 @@ def get_pool(refresh: bool = False) -> dict:
         d = _load()
     entries = d.get("entries", [])
 
-    # 当前价：一次批量请求
+    # 当前价：A 股 6 位代码一次批量请求（腾讯）；非 A 股用最近收盘价（随收益刷新缓存）
+    a_codes = sorted({e["code"] for e in entries if len(e["code"]) == 6 and e["code"].isdigit() and e.get("market", "A") == "A"})
     quotes: dict = {}
-    if entries:
+    if a_codes:
         try:
-            quotes = astock.tencent_quote(sorted({e["code"] for e in entries}))
+            quotes = astock.tencent_quote(a_codes)
         except Exception:
             quotes = {}
 
@@ -184,12 +206,14 @@ def get_pool(refresh: bool = False) -> dict:
             continue
         if not refresh and e.get("perf_asof") == today:
             continue
-        closes = _closes_after(e["code"], e["entry_date"])
+        closes = _closes_after(e["code"], e["entry_date"], e.get("secid", ""), e.get("market", "A"))
         if not closes and not refresh:
             continue  # 行情源暂不可用：保留旧值，明天再试
         e["perf"] = calc_perf(e["entry_price"], closes)
         e["mature"] = e["perf"]["d10"] is not None
         e["perf_asof"] = today
+        if closes:
+            e["last_close"] = closes[-1]
         dirty = True
     if dirty:
         with _LOCK:
@@ -204,7 +228,8 @@ def get_pool(refresh: bool = False) -> dict:
         rows.append({
             **{k: e[k] for k in ("id", "code", "name", "entry_date", "entry_price",
                                  "strategies", "tag", "note", "perf", "mature")},
-            "price": q.get("price"),
+            "market": e.get("market", "A"),
+            "price": q.get("price") or e.get("last_close"),
             "change_pct": q.get("change_pct"),
             "status": "成熟" if e.get("mature") else "待成熟",
         })

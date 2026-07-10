@@ -594,16 +594,30 @@ def investor_qa(code: str = Query(...)):
 
 
 @app.get("/api/review/scan")
-def review_scan(refresh: int = Query(0, ge=0, le=1)):
-    """全市场扫描 → 策略候选清单（客观阈值规则命中，成交额降序；不评分、不推荐）。缓存 5 分钟。"""
+def review_scan(refresh: int = Query(0, ge=0, le=1),
+                market: str = Query("A"), pool: str = Query("all")):
+    """多市场扫描（A股/港股/美股/ETF；A 股可选股票池）→ 策略候选清单。缓存 5 分钟/市场+池。"""
+    if market not in screener.MARKETS:
+        raise HTTPException(400, f"market 只能是 {list(screener.MARKETS)} 之一")
+    if pool not in screener.POOLS:
+        raise HTTPException(400, f"pool 只能是 {list(screener.POOLS)} 之一")
     try:
-        return {"data": screener.scan(force=bool(refresh))}
+        return {"data": screener.scan(market=market, pool=pool, force=bool(refresh))}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"候选扫描异常：{e}") from e
 
 
+import re as _re
+
+_POOL_CODE_RE = _re.compile(r"^[A-Za-z0-9.\-]{1,10}$")  # A股6位 / 港股5位 / 美股 ticker（如 BRK.B）
+
+
 class PoolItemIn(BaseModel):
     code: str
+    name: str = ""
+    price: float | None = None
+    secid: str = ""
+    market: str = "A"
     strategies: list[str] = []
 
 
@@ -626,9 +640,12 @@ def review_pool_add(body: PoolAddIn):
     items = []
     for it in body.items:
         code = (it.code or "").strip()
-        if not code.isdigit() or len(code) != 6:
-            raise HTTPException(400, f"代码必须是 6 位数字：{it.code}")
-        items.append({"code": code, "strategies": it.strategies})
+        if not _POOL_CODE_RE.match(code):
+            raise HTTPException(400, f"代码格式不合法：{it.code}")
+        if it.market == "A" and not (code.isdigit() and len(code) == 6):
+            raise HTTPException(400, f"A 股代码必须是 6 位数字：{it.code}")
+        items.append({"code": code, "name": it.name, "price": it.price,
+                      "secid": it.secid, "market": it.market, "strategies": it.strategies})
     if not items:
         raise HTTPException(400, "items 不能为空")
     try:

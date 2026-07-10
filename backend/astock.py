@@ -122,6 +122,32 @@ def tencent_daily_kline(code: str, count: int = 30) -> list[dict]:
     return out
 
 
+def em_daily_kline(secid: str, count: int = 30) -> list[dict]:
+    """东财通用日K（前复权）：支持 A股/港股/美股/ETF 的 secid（如 1.600519 / 116.00700 / 105.AAPL）。
+
+    复盘池非 A 股标的的收益跟踪用；A 股优先走 tencent_daily_kline（无限流）。
+    """
+    params = {
+        "secid": secid, "klt": "101", "fqt": "1", "lmt": str(count),
+        "end": "20500101", "fields1": "f1,f2,f3", "fields2": "f51,f52,f53,f54,f55",
+    }
+    headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
+    try:
+        d = em_get("https://push2his.eastmoney.com/api/qt/stock/kline/get",
+                   params=params, headers=headers, timeout=15, min_interval=0.3).json()
+    except Exception:
+        return []
+    out = []
+    for line in (d.get("data") or {}).get("klines") or []:
+        p = line.split(",")
+        if len(p) >= 3:
+            try:
+                out.append({"date": p[0], "open": float(p[1]), "close": float(p[2])})
+            except ValueError:
+                continue
+    return out
+
+
 # A股大盘指数（前缀规则与个股不同，固定带前缀代码）
 A_INDICES = ["sh000001", "sz399001", "sz399006", "sh000300"]
 

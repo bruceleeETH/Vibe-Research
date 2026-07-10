@@ -77,7 +77,7 @@ def test_scan_filters_st_and_sorts(scan_isolated):
         _row(code="600003", name="大成交", pct=5, vol_ratio=1.5, turnover=4, amount=8e8, industry="AI"),
         _row(code="600004", name="不命中", pct=0.5),
     ]
-    scan_isolated.setattr(screener, "market_snapshot", lambda: snapshot)
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A": snapshot)
     out = screener.scan(force=True)
     codes = [c["code"] for c in out["candidates"]]
     assert codes == ["600003", "600001"]          # ST 排除、不命中排除、成交额降序
@@ -90,7 +90,7 @@ def test_scan_filters_st_and_sorts(scan_isolated):
 def test_scan_fund_fallback_join(scan_isolated):
     """行情快照资金字段全空时，独立资金快照按代码补齐。"""
     snapshot = [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)]
-    scan_isolated.setattr(screener, "market_snapshot", lambda: snapshot)
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A": snapshot)
     scan_isolated.setattr(screener, "fund_snapshot",
                           lambda: {"600001": {"main_net": 2.5e8, "super_net": 1e8, "main_pct": 6.1}})
     c = screener.scan(force=True)["candidates"][0]
@@ -100,7 +100,7 @@ def test_scan_fund_fallback_join(scan_isolated):
 def test_scan_attaches_pool_history(scan_isolated, tmp_path):
     """候选曾入池 → pool_history 带历次真实表现（新→旧）。"""
     snapshot = [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)]
-    scan_isolated.setattr(screener, "market_snapshot", lambda: snapshot)
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A": snapshot)
     import json, os
     os.makedirs(tmp_path, exist_ok=True)
     entries = [
@@ -124,7 +124,7 @@ def test_snapshot_paging_fallback(monkeypatch):
     total = 250
     universe = [{"f12": f"{600000 + i}", "f14": f"股{i}", "f6": 1e8 * (total - i)} for i in range(total)]
 
-    def fake_page(host, pn, pz, fid="f6", fields=""):
+    def fake_page(host, pn, pz, fid="f6", fields="", fs=""):
         if host != "push2delay.eastmoney.com":
             raise ConnectionError("host down")     # 前两个主机全挂
         pz = min(pz, 100)                          # 服务端钳页长到 100
@@ -134,6 +134,26 @@ def test_snapshot_paging_fallback(monkeypatch):
     rows = screener.market_snapshot()
     assert len(rows) == total                      # 3 页补齐、无重复
     assert rows[0]["code"] == "600000"
+
+
+def test_scan_market_pool_params(scan_isolated):
+    snapshot = [
+        _row(code="300001", name="创股", pct=5, vol_ratio=1.5, turnover=4, amount=3e8),
+        _row(code="600001", name="沪股", pct=5, vol_ratio=1.5, turnover=4, amount=3e8),
+    ]
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A": snapshot)
+    out = screener.scan(pool="cyb", force=True)                 # 创业板池 = 30 开头前缀过滤
+    assert [c["code"] for c in out["candidates"]] == ["300001"]
+    assert out["market"] == "A" and out["pool"] == "cyb"
+    assert {m["key"] for m in out["markets"]} == {"A", "HK", "US", "ETF"}
+    out2 = screener.scan(market="HK", pool="cyb", force=True)   # 池仅对 A 股生效
+    assert out2["pool"] == "all"
+
+
+def test_match_strategies_market_floors():
+    r = _row(pct=5, vol_ratio=1.5, turnover=4, amount=1e8)      # 1亿：A 股不命中
+    assert "volume_surge" not in screener.match_strategies(r, screener.MARKETS["A"]["floors"])
+    assert "volume_surge" in screener.match_strategies(r, screener.MARKETS["HK"]["floors"])
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +224,7 @@ def pool(tmp_path, monkeypatch):
     monkeypatch.setattr(rp, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(rp.astock, "tencent_quote",
                         lambda codes: {c: {"name": f"股{c}", "price": 10.0, "change_pct": 1.0} for c in codes})
-    monkeypatch.setattr(rp, "_closes_after", lambda code, entry_date: [10.5, 11.0])
+    monkeypatch.setattr(rp, "_closes_after", lambda code, entry_date, secid="", market="A": [10.5, 11.0])
     return rp
 
 
@@ -228,15 +248,37 @@ def test_pool_add_tag_remove(pool):
     assert pool.get_pool()["total"] == 0
 
 
+def test_default_secid():
+    assert rp._default_secid("600519") == "1.600519"
+    assert rp._default_secid("510300") == "1.510300"   # 沪 ETF
+    assert rp._default_secid("000001") == "0.000001"
+    assert rp._default_secid("159915") == "0.159915"   # 深 ETF
+
+
+def test_pool_add_non_a_with_price(pool):
+    """非 A 股入池：价格/名称由扫描行带入，不走腾讯行情。"""
+    r = pool.add_batch([{"code": "AAPL", "name": "苹果", "price": 200.5,
+                         "secid": "105.AAPL", "market": "US"}])
+    assert r["added"] == 1
+    e = [x for x in pool.get_pool()["entries"] if x["code"] == "AAPL"][0]
+    assert e["entry_price"] == 200.5 and e["market"] == "US" and e["name"] == "苹果"
+
+
+def test_api_scan_bad_market_pool_400():
+    assert client.get("/api/review/scan?market=XX").status_code == 400
+    assert client.get("/api/review/scan?pool=nope").status_code == 400
+
+
 def test_pool_mature_locks(pool, monkeypatch):
     pool.add_batch([{"code": "000001"}])
-    monkeypatch.setattr(pool, "_closes_after", lambda code, entry_date: [10.0 + i * 0.1 for i in range(12)])
+    monkeypatch.setattr(pool, "_closes_after",
+                        lambda code, entry_date, secid="", market="A": [10.0 + i * 0.1 for i in range(12)])
     e = pool.get_pool(refresh=True)["entries"][0]
     # 第 10 个收盘 = 10.0 + 9*0.1 = 10.9 → +9.0%
     assert e["mature"] and e["status"] == "成熟" and e["perf"]["d10"] == 9.0
 
     # 成熟后不再重拉 K 线（打桩成抛异常也不影响）
-    def boom(code, entry_date):
+    def boom(code, entry_date, secid="", market="A"):
         raise AssertionError("成熟样本不应重拉行情")
     monkeypatch.setattr(pool, "_closes_after", boom)
     assert pool.get_pool(refresh=True)["entries"][0]["perf"]["d10"] == 9.0
@@ -292,7 +334,7 @@ def test_api_pool_remove_404():
 
 def test_api_scan_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(screener, "market_snapshot",
-                        lambda: [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)])
+                        lambda market="A": [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)])
     monkeypatch.setattr(screener, "fund_snapshot", lambda: {})
     monkeypatch.setattr(screener, "industry_strength", lambda: {})
     monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))
@@ -300,7 +342,8 @@ def test_api_scan_shape(monkeypatch, tmp_path):
     r = client.get("/api/review/scan?refresh=1")
     assert r.status_code == 200
     d = r.json()["data"]
-    assert set(d) == {"generated_at", "scanned", "strategies", "candidates"}
+    assert set(d) == {"generated_at", "scanned", "strategies", "candidates",
+                      "market", "pool", "pool_note", "markets", "pools"}
     c = d["candidates"][0]
     assert {"code", "name", "pct", "amount", "turnover", "vol_ratio", "pe_ttm",
             "industry", "strategies", "flags", "main_net", "super_net", "main_pct",

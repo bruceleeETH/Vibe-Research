@@ -57,6 +57,17 @@ const factorText = (c: ScanCandidate) =>
 const scoreColor = (s: number) =>
   s >= 80 ? "text-danger" : s >= 60 ? "text-primary" : "text-muted-foreground";
 
+// 市场/股票池静态兜底（首个响应返回前渲染按钮用；以后端返回为准）
+const MARKETS_FALLBACK = [
+  { key: "A", name: "A股" }, { key: "HK", name: "港股" },
+  { key: "US", name: "美股" }, { key: "ETF", name: "ETF" },
+];
+const POOLS_FALLBACK = [
+  { key: "all", name: "全市场" }, { key: "hs300", name: "沪深300" },
+  { key: "zz500", name: "中证500" }, { key: "hs300zz500", name: "沪深300+中证500" },
+  { key: "cyb", name: "创业板" }, { key: "kcb", name: "科创板" },
+];
+
 export function ReviewPool() {
   const [tab, setTab] = useState<"scan" | "pool">("scan");
   const [view, setView] = useState<View>("rank");
@@ -64,23 +75,36 @@ export function ReviewPool() {
   const [pool, setPool] = useState<PoolData | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [poolLoading, setPoolLoading] = useState(false);
+  const [market, setMarket] = useState("A");
+  const [stockPool, setStockPool] = useState("all");
   const [strategy, setStrategy] = useState<string>("all");
   const [hideFlagged, setHideFlagged] = useState(true);
   const [minAmount3, setMinAmount3] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortAsc, setSortAsc] = useState(false);
   const [minScore, setMinScore] = useState(0);
+  const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [manualInput, setManualInput] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
-  const loadScan = (refresh = false) => {
+  const loadScan = (refresh = false, m = market, p = stockPool) => {
     setScanLoading(true);
     setErr(null);
-    api.reviewScan(refresh)
+    api.reviewScan(m, p, refresh)
       .then(setScan)
       .catch((e) => setErr(e.message))
       .finally(() => setScanLoading(false));
+  };
+  const switchMarket = (m: string) => {
+    setMarket(m);
+    if (m !== "A") setStockPool("all");
+    setStrategy("all");
+    loadScan(false, m, m === "A" ? stockPool : "all");
+  };
+  const switchPool = (p: string) => {
+    setStockPool(p);
+    loadScan(false, market, p);
   };
   const loadPool = (refresh = false) => {
     setPoolLoading(true);
@@ -106,8 +130,10 @@ export function ReviewPool() {
     if (hideFlagged) rows = rows.filter((c) => c.flags.length === 0);
     if (minAmount3) rows = rows.filter((c) => (c.amount ?? 0) >= 3e8);
     if (minScore > 0) rows = rows.filter((c) => (c.score ?? 0) >= minScore);
+    const q = search.trim().toLowerCase();
+    if (q) rows = rows.filter((c) => c.code.toLowerCase().includes(q) || c.name.toLowerCase().includes(q));
     return rows;
-  }, [scan, strategy, hideFlagged, minAmount3, minScore]);
+  }, [scan, strategy, hideFlagged, minAmount3, minScore, search]);
 
   // 排序：表头点击优先；否则按视角默认（皆为公开的客观键，null 沉底）
   const sorted = useMemo(() => {
@@ -159,7 +185,10 @@ export function ReviewPool() {
 
   const addToPool = async (c: ScanCandidate) => {
     try {
-      const r = await api.reviewPoolAdd([{ code: c.code, strategies: c.strategies }]);
+      const r = await api.reviewPoolAdd([{
+        code: c.code, name: c.name, price: c.price, secid: c.secid,
+        market: c.market || market, strategies: c.strategies,
+      }]);
       toast[r.added ? "success" : "info"](r.added ? `${c.name} 已入复盘池` : `${c.name} 今日已在池中`);
       if (r.added) loadPool();
     } catch (e) {
@@ -226,7 +255,9 @@ export function ReviewPool() {
       return `我的复盘池（入池后真实收盘的客观回看，${pool?.updated}）：\n` + es.map((e) =>
         `${e.name}(${e.code}) 入池${e.entry_date}@${e.entry_price} 现价${e.price ?? "—"} 1D:${pct(e.perf.d1)} 3D:${pct(e.perf.d3)} 5D:${pct(e.perf.d5)} 10D:${pct(e.perf.d10)} ${e.status}${e.tag ? " 标签:" + e.tag : ""}${e.note ? " 备注:" + e.note : ""}`).join("\n");
     }
-    const head = `候选扫描（客观阈值硬筛，${scan?.generated_at}，扫描 ${scan?.scanned} 只）·`;
+    const mkt = (scan?.markets || MARKETS_FALLBACK).find((m) => m.key === scan?.market)?.name || "A股";
+    const pl = (scan?.pools || POOLS_FALLBACK).find((p) => p.key === scan?.pool)?.name || "全市场";
+    const head = `候选扫描（${mkt} · ${pl} · 客观阈值硬筛，${scan?.generated_at}，扫描 ${scan?.scanned} 只）·`;
     if (view === "industry") {
       if (!groups.length) return "今日候选扫描暂无结果。";
       return `${head} 行业视角：\n` + groups.map((g) =>
@@ -400,6 +431,51 @@ export function ReviewPool() {
 
       {tab === "scan" ? (
         <GlassCard glow>
+          {/* 市场 + 股票池 + 搜索（对齐选股工作台左栏） */}
+          <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border/40 pb-3">
+            <span className="text-xs text-muted-foreground">市场</span>
+            {(scan?.markets || MARKETS_FALLBACK).map((m) => (
+              <button
+                key={m.key}
+                onClick={() => switchMarket(m.key)}
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-sm transition-colors",
+                  market === m.key ? "bg-primary/15 font-medium text-primary shadow-glow" : "text-muted-foreground hover:bg-muted/50",
+                )}
+              >
+                {m.name}
+              </button>
+            ))}
+            {market === "A" && (
+              <>
+                <span className="ml-2 text-xs text-muted-foreground">股票池</span>
+                <select
+                  value={stockPool}
+                  onChange={(e) => switchPool(e.target.value)}
+                  className="rounded-lg border border-border bg-transparent px-2 py-1.5 text-sm text-foreground outline-none"
+                >
+                  {(scan?.pools || POOLS_FALLBACK).map((p) => (
+                    <option key={p.key} value={p.key}>{p.name}</option>
+                  ))}
+                </select>
+              </>
+            )}
+            {market !== "A" && (
+              <span className="text-[11px] text-muted-foreground/70">
+                成交额单位为{market === "US" ? "美元" : market === "HK" ? "港元" : "人民币"}
+              </span>
+            )}
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="搜索代码 / 名称"
+              className="ml-auto w-44 rounded-lg border border-border bg-black/20 px-2.5 py-1.5 text-sm outline-none focus:border-primary/50"
+            />
+          </div>
+          {scan?.pool_note && (
+            <p className="mb-2 text-[11px] text-amber-500">{scan.pool_note}</p>
+          )}
+
           {/* 视角切换（同一候选集的四种客观投影） */}
           <div className="mb-3 flex flex-wrap items-center gap-1.5 border-b border-border/40 pb-3">
             {VIEWS.map((v) => (
@@ -679,6 +755,9 @@ export function ReviewPool() {
                         <td className="px-2 py-2.5">
                           <span className="font-medium">{e.name}</span>
                           <span className="ml-1.5 font-mono text-xs text-muted-foreground">{e.code}</span>
+                          {e.market && e.market !== "A" && (
+                            <span className="ml-1.5 rounded bg-sky-500/15 px-1 py-0.5 text-[10px] text-sky-500">{e.market}</span>
+                          )}
                         </td>
                         <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">{e.entry_date}</td>
                         <td className="px-2 py-2.5">
