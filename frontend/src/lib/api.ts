@@ -214,13 +214,19 @@ export interface IndustryData { top: IndustryRow[]; bottom: IndustryRow[]; total
 
 // 复盘工作台：候选扫描（客观阈值硬筛，不评分）+ 复盘池（1D/3D/5D/10D 客观回看）
 export interface ScanStrategy { key: string; name: string; desc: string; count: number }
+export interface PoolHistoryItem {
+  entry_date: string; entry_price: number;
+  perf: PoolPerf; mature: boolean; tag: string;
+}
 export interface ScanCandidate {
   code: string; name: string;
   price: number | null; pct: number | null; amount: number | null;
   turnover: number | null; vol_ratio: number | null;
   pe_ttm: number | null; pe_dyn: number | null; pb: number | null;
   mcap: number | null; industry: string;
+  main_net: number | null; super_net: number | null; main_pct: number | null;
   strategies: string[]; flags: string[];
+  pool_history: PoolHistoryItem[];
 }
 export interface ScanResult {
   generated_at: string; scanned: number;

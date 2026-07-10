@@ -60,21 +60,62 @@ def test_objective_flags():
     assert screener.objective_flags(_row(pct=5, turnover=5, amount=3e8)) == []
 
 
-def test_scan_filters_st_and_sorts(monkeypatch):
+@pytest.fixture()
+def scan_isolated(monkeypatch, tmp_path):
+    """scan 离线隔离：资金兜底与复盘池文件都不出网/不读真实缓存。"""
+    monkeypatch.setattr(screener, "fund_snapshot", lambda: {})
+    monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))
+    screener._CACHE.clear()
+    return monkeypatch
+
+
+def test_scan_filters_st_and_sorts(scan_isolated):
     snapshot = [
         _row(code="600001", name="正常股", pct=5, vol_ratio=1.5, turnover=4, amount=3e8, industry="半导体"),
         _row(code="600002", name="ST摆烂", pct=5, vol_ratio=1.5, turnover=4, amount=9e8),
         _row(code="600003", name="大成交", pct=5, vol_ratio=1.5, turnover=4, amount=8e8, industry="AI"),
         _row(code="600004", name="不命中", pct=0.5),
     ]
-    monkeypatch.setattr(screener, "market_snapshot", lambda: snapshot)
-    screener._CACHE.clear()
+    scan_isolated.setattr(screener, "market_snapshot", lambda: snapshot)
     out = screener.scan(force=True)
     codes = [c["code"] for c in out["candidates"]]
     assert codes == ["600003", "600001"]          # ST 排除、不命中排除、成交额降序
     assert out["scanned"] == 4
     vs = next(s for s in out["strategies"] if s["key"] == "volume_surge")
     assert vs["count"] == 2
+    assert out["candidates"][0]["pool_history"] == []   # 无历史 → 空列表（形状稳定）
+
+
+def test_scan_fund_fallback_join(scan_isolated):
+    """行情快照资金字段全空时，独立资金快照按代码补齐。"""
+    snapshot = [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)]
+    scan_isolated.setattr(screener, "market_snapshot", lambda: snapshot)
+    scan_isolated.setattr(screener, "fund_snapshot",
+                          lambda: {"600001": {"main_net": 2.5e8, "super_net": 1e8, "main_pct": 6.1}})
+    c = screener.scan(force=True)["candidates"][0]
+    assert c["main_net"] == 2.5e8 and c["main_pct"] == 6.1
+
+
+def test_scan_attaches_pool_history(scan_isolated, tmp_path):
+    """候选曾入池 → pool_history 带历次真实表现（新→旧）。"""
+    snapshot = [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)]
+    scan_isolated.setattr(screener, "market_snapshot", lambda: snapshot)
+    import json, os
+    os.makedirs(tmp_path, exist_ok=True)
+    entries = [
+        {"id": "a", "code": "600001", "name": "甲", "entry_date": "2026-07-01", "entry_price": 10.0,
+         "strategies": [], "tag": "观察", "note": "", "added": "2026-07-01 15:00",
+         "perf": {"d1": 1.0, "d3": 2.0, "d5": 3.0, "d10": 4.0}, "mature": True, "perf_asof": "2026-07-09"},
+        {"id": "b", "code": "600001", "name": "甲", "entry_date": "2026-07-08", "entry_price": 12.0,
+         "strategies": [], "tag": "", "note": "", "added": "2026-07-08 15:00",
+         "perf": {"d1": -1.5, "d3": None, "d5": None, "d10": None}, "mature": False, "perf_asof": "2026-07-10"},
+    ]
+    with open(rp.POOL_FILE, "w", encoding="utf-8") as f:
+        json.dump({"entries": entries}, f, ensure_ascii=False)
+    c = screener.scan(force=True)["candidates"][0]
+    assert len(c["pool_history"]) == 2
+    assert c["pool_history"][0]["entry_date"] == "2026-07-08"    # 新→旧
+    assert c["pool_history"][1]["mature"] and c["pool_history"][1]["perf"]["d10"] == 4.0
 
 
 def test_snapshot_paging_fallback(monkeypatch):
@@ -82,7 +123,7 @@ def test_snapshot_paging_fallback(monkeypatch):
     total = 250
     universe = [{"f12": f"{600000 + i}", "f14": f"股{i}", "f6": 1e8 * (total - i)} for i in range(total)]
 
-    def fake_page(host, pn, pz):
+    def fake_page(host, pn, pz, fid="f6", fields=""):
         if host != "push2delay.eastmoney.com":
             raise ConnectionError("host down")     # 前两个主机全挂
         pz = min(pz, 100)                          # 服务端钳页长到 100
@@ -170,7 +211,14 @@ def test_live_market_snapshot_shape():
     rows = screener.market_snapshot()
     assert len(rows) > 4000                      # 全 A ~5000+，一次请求拿全
     r = rows[0]
-    assert {"code", "name", "pct", "amount", "turnover", "vol_ratio", "pe_ttm", "industry"} <= set(r)
+    assert {"code", "name", "pct", "amount", "turnover", "vol_ratio", "pe_ttm", "industry",
+            "main_net", "super_net", "main_pct"} <= set(r)
+    # 资金字段联通性：成交额头部 100 只里应有相当比例非空（上游偶发置空则走 fund_snapshot 兜底）
+    top = rows[:100]
+    hit = sum(1 for x in top if x["main_net"] is not None)
+    if hit < 50:
+        fund = screener.fund_snapshot()
+        assert len(fund) > 3000 and any(v["main_net"] is not None for v in fund.values())
 
 
 @pytest.mark.live
@@ -202,9 +250,11 @@ def test_api_pool_remove_404():
     assert client.delete("/api/review/pool/no-such-id").status_code == 404
 
 
-def test_api_scan_shape(monkeypatch):
+def test_api_scan_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(screener, "market_snapshot",
                         lambda: [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)])
+    monkeypatch.setattr(screener, "fund_snapshot", lambda: {})
+    monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))
     screener._CACHE.clear()
     r = client.get("/api/review/scan?refresh=1")
     assert r.status_code == 200
@@ -212,4 +262,5 @@ def test_api_scan_shape(monkeypatch):
     assert set(d) == {"generated_at", "scanned", "strategies", "candidates"}
     c = d["candidates"][0]
     assert {"code", "name", "pct", "amount", "turnover", "vol_ratio", "pe_ttm",
-            "industry", "strategies", "flags"} <= set(c)
+            "industry", "strategies", "flags", "main_net", "super_net", "main_pct",
+            "pool_history"} <= set(c)

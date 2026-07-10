@@ -139,6 +139,26 @@ def remove(eid: str) -> bool:
     return False
 
 
+def history_by_code(codes: set[str]) -> dict[str, list[dict]]:
+    """按代码归组的历次入池记录（新→旧），给候选扫描的「复盘视角」关联用。
+
+    只读本地池文件、不刷行情——扫描高频调用，历史表现由 get_pool 的日常刷新维护。
+    """
+    with _LOCK:
+        d = _load()
+    out: dict[str, list[dict]] = {}
+    for e in d.get("entries", []):
+        if e["code"] in codes:
+            out.setdefault(e["code"], []).append({
+                "entry_date": e["entry_date"], "entry_price": e["entry_price"],
+                "perf": e.get("perf", {}), "mature": bool(e.get("mature")),
+                "tag": e.get("tag", ""),
+            })
+    for lst in out.values():
+        lst.sort(key=lambda x: x["entry_date"], reverse=True)
+    return out
+
+
 def get_pool(refresh: bool = False) -> dict:
     """读复盘池：当前价批量刷新 + 未成熟样本按日更新 1D/3D/5D/10D。
 

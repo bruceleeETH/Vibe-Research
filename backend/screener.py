@@ -74,7 +74,9 @@ def objective_flags(r: dict) -> list[str]:
 # 全市场快照（东财 clist，一次请求全 A；push2 失败降级 push2delay）
 # ---------------------------------------------------------------------------
 
-_SNAPSHOT_FIELDS = "f12,f14,f2,f3,f6,f8,f9,f10,f20,f23,f100,f115"
+# f62 主力净额 / f66 超大单净额 / f184 主力净占比% —— 随行情快照一并取（同一 clist 接口族）
+_SNAPSHOT_FIELDS = "f12,f14,f2,f3,f6,f8,f9,f10,f20,f23,f100,f115,f62,f66,f184"
+_FUND_FIELDS = "f12,f62,f66,f184"
 _SNAPSHOT_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
 # 编号主机（akshare 同款）通常接受大分页一次拿全；裸 push2 对大 pz 可能直接断连，
 # push2delay 会把页长钳到 100 —— 故按顺序探测，拿不全再降级分页。
@@ -92,13 +94,16 @@ def _norm(d: dict) -> dict:
         "vol_ratio": nf(d.get("f10")),
         "pe_ttm": nf(d.get("f115")), "pe_dyn": nf(d.get("f9")), "pb": nf(d.get("f23")),
         "mcap": nf(d.get("f20")), "industry": str(d.get("f100", "") or ""),
+        "main_net": nf(d.get("f62")), "super_net": nf(d.get("f66")),
+        "main_pct": nf(d.get("f184")),
     }
 
 
-def _clist_page(host: str, pn: int, pz: int) -> tuple[list[dict], int]:
+def _clist_page(host: str, pn: int, pz: int, fid: str = "f6",
+                fields: str = _SNAPSHOT_FIELDS) -> tuple[list[dict], int]:
     """clist 一页：(diff 行, 服务端报告的 total)。异常上抛给调用方决策。"""
     params = {"pn": pn, "pz": pz, "po": 1, "np": 1, "fltt": 2, "invt": 2,
-              "fid": "f6", "fs": _SNAPSHOT_FS, "fields": _SNAPSHOT_FIELDS}
+              "fid": fid, "fs": _SNAPSHOT_FS, "fields": fields}
     r = astock.em_get(f"https://{host}/api/qt/clist/get", params=params,
                       headers={"User-Agent": astock.UA, "Referer": "https://quote.eastmoney.com/"},
                       timeout=20, min_interval=_PAGE_INTERVAL)
@@ -106,21 +111,21 @@ def _clist_page(host: str, pn: int, pz: int) -> tuple[list[dict], int]:
     return data.get("diff") or [], int(data.get("total") or 0)
 
 
-def market_snapshot() -> list[dict]:
-    """全市场 A 股快照：code/name/price/pct/amount/turnover/vol_ratio/pe_ttm/pb/mcap/industry。
+def _clist_all(fid: str = "f6", fields: str = _SNAPSHOT_FIELDS) -> list[dict]:
+    """clist 全市场拉取（原始 diff 行，按代码去重）。
 
-    先逐主机试「单次大页拿全」；服务端钳页长/断连时，降级为按成交额降序分页补齐
-    （po=1 fid=f6，越靠前越是高流动性标的，部分覆盖时也先保住主战场）。
+    先逐主机试「单次大页拿全」；服务端钳页长/断连时，降级为按 fid 降序分页补齐
+    （po=1，越靠前越是该维度头部标的，部分覆盖时也先保住主战场）。
     """
     best: list[dict] = []
     best_host = _HOSTS[0]
     for host in _HOSTS:
         try:
-            diff, total = _clist_page(host, 1, 10000)
+            diff, total = _clist_page(host, 1, 10000, fid, fields)
         except Exception:
             continue
         if diff and len(diff) >= max(total, 1) * 0.9:
-            return [_norm(d) for d in diff]          # 一次拿全
+            return diff                              # 一次拿全
         if len(diff) > len(best):
             best, best_host = diff, host
 
@@ -133,7 +138,7 @@ def market_snapshot() -> list[dict]:
     total = 0
     for pn in range(2, _MAX_PAGES + 1):
         try:
-            diff, total = _clist_page(best_host, pn, pz)
+            diff, total = _clist_page(best_host, pn, pz, fid, fields)
         except Exception:
             break
         rows.extend(diff)
@@ -146,8 +151,28 @@ def market_snapshot() -> list[dict]:
         c = str(d.get("f12", ""))
         if c and c not in seen:
             seen.add(c)
-            out.append(_norm(d))
+            out.append(d)
     return out
+
+
+def market_snapshot() -> list[dict]:
+    """全市场 A 股快照（含主力资金字段，见 _norm）。"""
+    return [_norm(d) for d in _clist_all("f6", _SNAPSHOT_FIELDS)]
+
+
+def fund_snapshot() -> dict[str, dict]:
+    """全市场主力资金快照（fid=f62 独立拉取）→ {code: {main_net, super_net, main_pct}}。
+
+    兜底用：行情快照里的资金字段被上游置空时，再走这条补一次。
+    """
+    nf = astock._numf
+    return {
+        str(d.get("f12", "")): {
+            "main_net": nf(d.get("f62")), "super_net": nf(d.get("f66")),
+            "main_pct": nf(d.get("f184")),
+        }
+        for d in _clist_all("f62", _FUND_FIELDS)
+    }
 
 
 def scan(force: bool = False) -> dict:
@@ -169,10 +194,31 @@ def scan(force: bool = False) -> dict:
         if not hits:
             continue
         r2 = dict(r)
+        r2.setdefault("main_net", None)
+        r2.setdefault("super_net", None)
+        r2.setdefault("main_pct", None)
         r2["strategies"] = hits
         r2["flags"] = objective_flags(r)
         candidates.append(r2)
     candidates.sort(key=lambda x: -(x["amount"] or 0))
+
+    # 资金字段兜底：行情快照里全空（上游对该组合字段间歇置空）时，独立按 f62 补拉一次
+    if candidates and all(c["main_net"] is None for c in candidates):
+        try:
+            fund = fund_snapshot()
+            for c in candidates:
+                c.update(fund.get(c["code"], {}))
+        except Exception:
+            pass  # 资金源故障不挡扫描，字段保持 null、前端显示「—」
+
+    # 复盘历史关联：该候选此前历次入池的真实表现（本地池文件，客观回放）
+    try:
+        import reviewpool
+        history = reviewpool.history_by_code({c["code"] for c in candidates})
+    except Exception:
+        history = {}
+    for c in candidates:
+        c["pool_history"] = history.get(c["code"], [])
 
     counts = {s["key"]: 0 for s in STRATEGIES}
     for c in candidates:
