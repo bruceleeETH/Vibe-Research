@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { api, type ScanResult, type PoolData, type ScanCandidate, type PoolEntry, type ReviewStats, type PerfAgg } from "@/lib/api";
+import { api, type ScanResult, type PoolData, type ScanCandidate, type PoolEntry, type ReviewStats, type PerfAgg, type Bar, type FactorWeights, type Announcement } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // A 股红涨绿跌（全站一致）
@@ -57,6 +57,31 @@ const factorText = (c: ScanCandidate) =>
 const scoreColor = (s: number) =>
   s >= 80 ? "text-danger" : s >= 60 ? "text-primary" : "text-muted-foreground";
 
+// 迷你日K（SVG 蜡烛，A股红涨绿跌），零依赖
+function MiniKline({ bars }: { bars: Bar[] }) {
+  if (!bars.length) return <p className="py-4 text-center text-xs text-muted-foreground/60">K线加载中…</p>;
+  const w = 360, h = 110, n = bars.length;
+  const hi = Math.max(...bars.map((b) => b.high));
+  const lo = Math.min(...bars.map((b) => b.low));
+  const x = (i: number) => (i + 0.5) * (w / n);
+  const y = (v: number) => h - ((v - lo) / (hi - lo || 1)) * (h - 6) - 3;
+  const bw = Math.max(1.5, (w / n) * 0.6);
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full">
+      {bars.map((b, i) => {
+        const col = b.close >= b.open ? "#ef4444" : "#10b981";
+        return (
+          <g key={b.date}>
+            <line x1={x(i)} x2={x(i)} y1={y(b.high)} y2={y(b.low)} stroke={col} strokeWidth="1" />
+            <rect x={x(i) - bw / 2} y={y(Math.max(b.open, b.close))} width={bw}
+              height={Math.max(1, Math.abs(y(b.open) - y(b.close)))} fill={col} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 // 表格样式：数值列右对齐 + 等宽字体；行 hover 高亮 + 斑马纹；表头吸顶（配合内滚容器）
 const numTd = "px-2 py-2.5 text-right font-mono";
 const rowCls = "border-b border-border/30 even:bg-white/[0.02] hover:bg-primary/5 cursor-pointer transition-colors";
@@ -99,7 +124,22 @@ export function ReviewPool() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [manualInput, setManualInput] = useState("");
   const [detail, setDetail] = useState<ScanCandidate | null>(null);
+  const [detailBars, setDetailBars] = useState<Bar[]>([]);
+  const [detailAnns, setDetailAnns] = useState<Announcement[]>([]);
+  const [weights, setWeights] = useState<FactorWeights | null>(null);
+  const [weightsOpen, setWeightsOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // 详情栏打开时拉迷你K线 + 近期公告（A股）
+  useEffect(() => {
+    setDetailBars([]);
+    setDetailAnns([]);
+    if (!detail) return;
+    api.reviewKline(detail.code, detail.secid, detail.market || "A").then(setDetailBars).catch(() => {});
+    if ((detail.market || "A") === "A") {
+      api.announcements(detail.code).then((a) => setDetailAnns(a.slice(0, 5))).catch(() => {});
+    }
+  }, [detail?.code]);
 
   // 当前市场/池的引用：stale 自动重取时校验，避免切换市场后被旧请求覆盖
   const currentKey = useRef("A:all");
@@ -613,6 +653,16 @@ export function ReviewPool() {
               <option value={80}>综合分≥80</option>
             </select>
             <button
+              onClick={() => {
+                setWeightsOpen(!weightsOpen);
+                if (!weights) api.reviewWeights().then(setWeights).catch((e) => toast.error(e.message));
+              }}
+              className={cn("rounded-full px-3 py-1 text-xs transition-colors",
+                weightsOpen ? "bg-primary/15 text-primary" : "bg-muted/40 text-muted-foreground hover:text-foreground")}
+            >
+              因子权重
+            </button>
+            <button
               onClick={() => loadScan(true)}
               disabled={scanLoading}
               className="ml-auto text-muted-foreground hover:text-primary"
@@ -621,6 +671,33 @@ export function ReviewPool() {
               <RefreshCw className={cn("h-3.5 w-3.5", scanLoading && "animate-spin")} />
             </button>
           </div>
+
+          {/* 因子权重面板：保存后自动归一并重算分数 */}
+          {weightsOpen && weights && (
+            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-border/40 bg-muted/10 px-3 py-2 text-xs">
+              {(["trend", "volume", "fund", "valuation", "industry"] as const).map((k) => (
+                <label key={k} className="flex items-center gap-1 text-muted-foreground">
+                  {FACTOR_NAME[k]}
+                  <input
+                    type="number" min={0} max={100}
+                    value={Math.round(weights[k] * 100)}
+                    onChange={(e) => setWeights({ ...weights, [k]: Number(e.target.value) / 100 })}
+                    className="w-14 rounded border border-border bg-black/20 px-1.5 py-0.5 text-right font-mono outline-none focus:border-primary/50"
+                  />
+                </label>
+              ))}
+              <button
+                onClick={() =>
+                  api.reviewWeightsSet(weights)
+                    .then((w) => { setWeights(w); toast.success("权重已保存，重算分数中"); loadScan(true); })
+                    .catch((e) => toast.error(e.message))}
+                className="rounded-lg bg-primary/15 px-3 py-1 font-medium text-primary hover:bg-primary/25"
+              >
+                保存并重算
+              </button>
+              <span className="text-muted-foreground/60">保存时自动归一为 100%；建议等「策略表现」积累成熟样本后按数据调整</span>
+            </div>
+          )}
 
           <p className="mb-2 text-[11px] text-muted-foreground/70">
             {view === "rank" && "默认按综合分排序（五因子加权：趋势25 量能25 资金20 估值15 行业15，因子为候选集内百分位；悬停分数看拆解）；点击任意数值列表头改排序。"}
@@ -941,14 +1018,38 @@ export function ReviewPool() {
                   （{pool?.total ?? 0} 条 · 成熟 {pool?.mature_count ?? 0} · 满 10 个交易日为成熟）
                 </span>
               </h3>
-              <button
-                onClick={() => loadPool(true)}
-                disabled={poolLoading}
-                className="text-muted-foreground hover:text-primary"
-                title="刷新表现"
-              >
-                <RefreshCw className={cn("h-3.5 w-3.5", poolLoading && "animate-spin")} />
-              </button>
+              <div className="flex items-center gap-2">
+                {pool && pool.entries.length > 0 && (
+                  <button
+                    onClick={() => {
+                      const head = "代码,名称,市场,入池日,信号收盘,点击价,次日开盘,现价,1D%,3D%,5D%,10D%,MFE%,MAE%,状态,策略,标签,备注";
+                      const rows = pool.entries.map((e) => [
+                        e.code, e.name, e.market, e.entry_date, e.signal_close ?? "", e.entry_price ?? "",
+                        e.next_open ?? "", e.price ?? "", e.perf.d1 ?? "", e.perf.d3 ?? "", e.perf.d5 ?? "",
+                        e.perf.d10 ?? "", e.mfe ?? "", e.mae ?? "", e.status,
+                        e.strategies.map((s) => STRATEGY_NAME[s] || s).join("/"), e.tag, (e.note || "").replace(/[\n,]/g, " "),
+                      ].join(","));
+                      const blob = new Blob(["﻿" + [head, ...rows].join("\n")], { type: "text/csv;charset=utf-8" });
+                      const a = document.createElement("a");
+                      a.href = URL.createObjectURL(blob);
+                      a.download = `复盘池_${new Date().toISOString().slice(0, 10)}.csv`;
+                      a.click();
+                      URL.revokeObjectURL(a.href);
+                    }}
+                    className="rounded-lg bg-primary/10 px-2.5 py-1 text-xs text-primary hover:bg-primary/20"
+                  >
+                    导出 CSV
+                  </button>
+                )}
+                <button
+                  onClick={() => loadPool(true)}
+                  disabled={poolLoading}
+                  className="text-muted-foreground hover:text-primary"
+                  title="刷新表现"
+                >
+                  <RefreshCw className={cn("h-3.5 w-3.5", poolLoading && "animate-spin")} />
+                </button>
+              </div>
             </div>
             {!pool || pool.entries.length === 0 ? (
               <p className="py-10 text-center text-sm text-muted-foreground/60">
@@ -1077,6 +1178,12 @@ export function ReviewPool() {
             </div>
           </div>
 
+          {/* 迷你日K（近 60 交易日） */}
+          <div className="rounded-lg border border-border/40 p-3">
+            <p className="mb-1 text-xs font-medium text-muted-foreground">日K · 近 {detailBars.length || 60} 个交易日</p>
+            <MiniKline bars={detailBars} />
+          </div>
+
           {/* 命中策略 + 提示 */}
           <div className="flex flex-wrap gap-1">
             <StrategyChips c={detail} />
@@ -1137,6 +1244,21 @@ export function ReviewPool() {
               </div>
             )}
           </div>
+
+          {/* 近期公告（A股） */}
+          {detailAnns.length > 0 && (
+            <div className="rounded-lg border border-border/40 p-3">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">近期公告</p>
+              <div className="space-y-1.5 text-xs">
+                {detailAnns.map((a) => (
+                  <a key={a.url + a.title} href={a.url} target="_blank" rel="noreferrer"
+                     className="block truncate text-muted-foreground hover:text-primary" title={a.title}>
+                    <span className="mr-1.5 font-mono text-muted-foreground/60">{a.date}</span>{a.title}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div onClick={(e) => e.stopPropagation()}>
             <AskAiButton

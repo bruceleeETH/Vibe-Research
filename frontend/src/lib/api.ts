@@ -275,6 +275,9 @@ export interface PoolData {
   tags: string[]; updated: string;
 }
 
+export interface Bar { date: string; open: number; close: number; high: number; low: number }
+export interface FactorWeights { trend: number; volume: number; fund: number; valuation: number; industry: number }
+
 // 影子样本存档回看
 export interface SampleDaySummary { date: string; n: number; mature_n: number }
 export interface SampleEntry {
@@ -350,6 +353,10 @@ export const api = {
     request<{ ok: boolean }>("/review/pool/tag", "POST", { id, tag, note }),
   reviewPoolRemove: (id: string) => request<{ ok: boolean }>(`/review/pool/${id}`, "DELETE"),
   reviewStats: () => get<ReviewStats>("/review/stats"),
+  reviewKline: (code: string, secid = "", market = "A", count = 60) =>
+    get<Bar[]>(`/review/kline?code=${encodeURIComponent(code)}&secid=${encodeURIComponent(secid)}&market=${market}&count=${count}`),
+  reviewWeights: () => get<FactorWeights>("/review/weights"),
+  reviewWeightsSet: (w: FactorWeights) => request<FactorWeights>("/review/weights", "POST", w),
   reviewSampleDays: () => get<SampleDaySummary[]>("/review/samples/days"),
   reviewSampleDay: (date: string) => get<SampleEntry[]>(`/review/samples/day?date=${date}`),
   reviewSamplesCapture: () => request<{ captured: number; note: string }>("/review/samples/capture", "POST"),

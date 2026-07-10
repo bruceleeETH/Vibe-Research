@@ -352,6 +352,46 @@ FACTOR_WEIGHTS = {
     "valuation": 0.15,  # 估值：PE 越低分越高（负 PE 记 20 分）
     "industry": 0.15,   # 行业：所属行业当日涨幅在全行业中的分位
 }
+_WEIGHTS_FILE = os.path.join(_HERE, ".cache", "factor_weights.json")
+
+
+def set_weights(w: dict) -> dict:
+    """更新因子权重（自动归一到和为 1），持久化并清扫描缓存（分数重算）。"""
+    vals = {}
+    for k in FACTOR_WEIGHTS:
+        try:
+            v = float(w.get(k, FACTOR_WEIGHTS[k]))
+        except (TypeError, ValueError):
+            raise ValueError(f"权重 {k} 必须是数字")
+        if v < 0:
+            raise ValueError(f"权重 {k} 不能为负")
+        vals[k] = v
+    total = sum(vals.values())
+    if total <= 0:
+        raise ValueError("权重之和必须大于 0")
+    FACTOR_WEIGHTS.update({k: round(v / total, 4) for k, v in vals.items()})
+    try:
+        os.makedirs(os.path.dirname(_WEIGHTS_FILE), exist_ok=True)
+        with open(_WEIGHTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(FACTOR_WEIGHTS, f)
+    except Exception:
+        pass
+    for k in [k for k in _CACHE if k.startswith("scan:")]:
+        _CACHE.pop(k, None)   # 分数口径变了，扫描缓存作废
+    return dict(FACTOR_WEIGHTS)
+
+
+def _load_weights() -> None:
+    try:
+        with open(_WEIGHTS_FILE, encoding="utf-8") as f:
+            w = json.load(f)
+        if set(w) == set(FACTOR_WEIGHTS) and all(isinstance(v, (int, float)) and v >= 0 for v in w.values()) and sum(w.values()) > 0:
+            FACTOR_WEIGHTS.update(w)
+    except Exception:
+        pass
+
+
+_load_weights()
 
 
 def _pct_rank(sorted_vals: list[float], v: float) -> float:

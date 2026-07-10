@@ -241,6 +241,38 @@ def test_scan_adaptive_floor(scan_isolated):
     assert min((c["amount"] for c in out["candidates"])) >= 3e8
 
 
+def test_set_weights_normalize_and_invalidate(scan_isolated, tmp_path):
+    scan_isolated.setattr(screener, "_WEIGHTS_FILE", str(tmp_path / "w.json"))
+    old = dict(screener.FACTOR_WEIGHTS)
+    try:
+        screener._CACHE["scan:A:all"] = (9e9, {"x": 1})
+        w = screener.set_weights({"trend": 50, "volume": 30, "fund": 10, "valuation": 5, "industry": 5})
+        assert abs(sum(w.values()) - 1.0) < 1e-6 and w["trend"] == 0.5
+        assert "scan:A:all" not in screener._CACHE       # 扫描缓存作废
+        with pytest.raises(ValueError):
+            screener.set_weights({"trend": -1, "volume": 0, "fund": 0, "valuation": 0, "industry": 0})
+    finally:
+        screener.FACTOR_WEIGHTS.update(old)
+
+
+def test_api_weights_and_kline(monkeypatch, tmp_path):
+    monkeypatch.setattr(screener, "_WEIGHTS_FILE", str(tmp_path / "w.json"))
+    old = dict(screener.FACTOR_WEIGHTS)
+    try:
+        r = client.get("/api/review/weights")
+        assert r.status_code == 200 and set(r.json()["data"]) == set(screener.FACTOR_WEIGHTS)
+        r = client.post("/api/review/weights", json={"trend": 40, "volume": 30, "fund": 10, "valuation": 10, "industry": 10})
+        assert r.status_code == 200 and r.json()["data"]["trend"] == 0.4
+        r = client.post("/api/review/weights", json={"trend": -5, "volume": 0, "fund": 0, "valuation": 0, "industry": 0})
+        assert r.status_code == 400
+    finally:
+        screener.FACTOR_WEIGHTS.update(old)
+    monkeypatch.setattr(rp, "_bars", lambda code, secid="", market="A", count=60: [_bar("2026-07-10", 10.0)])
+    r = client.get("/api/review/kline?code=600519")
+    assert r.status_code == 200 and r.json()["data"][0]["close"] == 10.0
+    assert client.get("/api/review/kline?code=**bad**").status_code == 400
+
+
 def test_sample_day_browse(shadow, monkeypatch):
     import os
     os.makedirs(sp.SAMPLES_DIR, exist_ok=True)

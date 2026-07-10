@@ -680,6 +680,42 @@ def review_pool_remove(eid: str):
     return {"data": {"ok": True}}
 
 
+@app.get("/api/review/kline")
+def review_kline(code: str = Query(...), secid: str = Query(""), market: str = Query("A"),
+                 count: int = Query(60, ge=10, le=250)):
+    """候选详情迷你K线：多市场日K（A股走腾讯，港/美/ETF 走东财通用日K）。"""
+    code = code.strip()
+    if not _POOL_CODE_RE.match(code):
+        raise HTTPException(400, f"代码格式不合法：{code}")
+    try:
+        return {"data": rp._bars(code, secid.strip(), market, count=count)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"K线异常：{e}") from e
+
+
+@app.get("/api/review/weights")
+def review_weights_get():
+    """当前因子权重（已归一）。"""
+    return {"data": screener.FACTOR_WEIGHTS}
+
+
+class WeightsIn(BaseModel):
+    trend: float
+    volume: float
+    fund: float
+    valuation: float
+    industry: float
+
+
+@app.post("/api/review/weights")
+def review_weights_set(w: WeightsIn):
+    """更新因子权重（自动归一、持久化、扫描缓存作废重算分数）。"""
+    try:
+        return {"data": screener.set_weights(w.model_dump())}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.get("/api/review/stats")
 def review_stats():
     """策略表现统计：影子样本（无选择偏差）×手动入池对照，分策略/分数段。缓存 10 分钟。"""
