@@ -161,7 +161,7 @@ export function Layout() {
 
       {/* Main —— 复盘工作台是数据密集页，放宽到全宽 */}
       <main className="flex-1 overflow-auto">
-        <div className={cn("mx-auto px-6 py-6", pathname === "/review-pool" ? "max-w-[1800px]" : "max-w-6xl")}>
+        <div className={cn("mx-auto px-6 py-6", pathname === "/review-pool" ? "max-w-none" : "max-w-6xl")}>
           <Outlet />
         </div>
       </main>

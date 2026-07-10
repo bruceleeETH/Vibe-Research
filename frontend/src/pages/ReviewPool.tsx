@@ -57,6 +57,12 @@ const factorText = (c: ScanCandidate) =>
 const scoreColor = (s: number) =>
   s >= 80 ? "text-danger" : s >= 60 ? "text-primary" : "text-muted-foreground";
 
+// 表格样式：数值列右对齐 + 等宽字体；行 hover 高亮 + 斑马纹；表头吸顶（配合内滚容器）
+const numTd = "px-2 py-2.5 text-right font-mono";
+const rowCls = "border-b border-border/30 even:bg-white/[0.02] hover:bg-primary/5 cursor-pointer transition-colors";
+const theadCls = "sticky top-0 z-10 bg-background/95 backdrop-blur";
+const scrollWrap = "max-h-[calc(100vh-400px)] overflow-auto";
+
 // 市场/股票池静态兜底（首个响应返回前渲染按钮用；以后端返回为准）
 const MARKETS_FALLBACK = [
   { key: "A", name: "A股" }, { key: "HK", name: "港股" },
@@ -86,6 +92,7 @@ export function ReviewPool() {
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [manualInput, setManualInput] = useState("");
+  const [detail, setDetail] = useState<ScanCandidate | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   // 当前市场/池的引用：stale 自动重取时校验，避免切换市场后被旧请求覆盖
@@ -301,7 +308,7 @@ export function ReviewPool() {
 
   // ---- 复用小组件 ----
   const SortTh = ({ k, label }: { k: SortKey; label: string }) => (
-    <th className="whitespace-nowrap px-2 py-2 font-medium">
+    <th className="whitespace-nowrap px-2 py-2 text-right font-medium">
       <button onClick={() => clickSort(k)} className="inline-flex items-center gap-0.5 hover:text-primary" title="点击排序">
         {label}
         {sortKey === k ? (sortAsc ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-40" />}
@@ -347,9 +354,9 @@ export function ReviewPool() {
   );
 
   // 综合排序 / 行业视角共用的明细行
-  // 综合分单元格：悬停显示五因子拆解
+  // 综合分单元格：悬停显示五因子拆解（点击行可打开详情栏看条形图）
   const ScoreCell = ({ c }: { c: ScanCandidate }) => (
-    <td className="px-2 py-2.5">
+    <td className="px-2 py-2.5 text-right">
       <span
         className={cn("cursor-help font-mono text-base font-bold", scoreColor(c.score ?? 0))}
         title={`因子拆解：${factorText(c)}（权重：趋势25 量能25 资金20 估值15 行业15）`}
@@ -359,28 +366,28 @@ export function ReviewPool() {
     </td>
   );
   const DetailRow = ({ c, showIndustry = true }: { c: ScanCandidate; showIndustry?: boolean }) => (
-    <tr className="border-b border-border/30">
+    <tr className={rowCls} onClick={() => setDetail(c)} title="点击查看详情">
       <NameCell c={c} />
       {showIndustry && <td className="max-w-32 truncate px-2 py-2.5 text-xs text-muted-foreground">{c.industry || "—"}</td>}
       <td className="px-2 py-2.5"><StrategyChips c={c} /></td>
       <ScoreCell c={c} />
-      <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.price ?? "—"}</td>
-      <td className={cn("px-2 py-2.5 font-mono", color(c.pct))}>{pct(c.pct)}</td>
-      <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.open_pct))}>{pct(c.open_pct)}</td>
-      <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.pct_5d))}>{pct(c.pct_5d)}</td>
-      <td className="px-2 py-2.5 font-mono text-muted-foreground">{yi(c.amount)}</td>
-      <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.turnover ?? "—"}</td>
-      <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.vol_ratio ?? "—"}</td>
-      <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.pe_ttm ?? "—"}</td>
-      <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.main_net))}>{fmtNet(c.main_net)}</td>
-      <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.pct_60d))}>{pct(c.pct_60d)}</td>
-      <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">{yi(c.mcap)}</td>
+      <td className={cn(numTd, "text-muted-foreground")}>{c.price ?? "—"}</td>
+      <td className={cn(numTd, color(c.pct))}>{pct(c.pct)}</td>
+      <td className={cn(numTd, "text-xs", color(c.open_pct))}>{pct(c.open_pct)}</td>
+      <td className={cn(numTd, "text-xs", color(c.pct_5d))}>{pct(c.pct_5d)}</td>
+      <td className={cn(numTd, "text-muted-foreground")}>{yi(c.amount)}</td>
+      <td className={cn(numTd, "text-muted-foreground")}>{c.turnover ?? "—"}</td>
+      <td className={cn(numTd, "text-muted-foreground")}>{c.vol_ratio ?? "—"}</td>
+      <td className={cn(numTd, "text-muted-foreground")}>{c.pe_ttm ?? "—"}</td>
+      <td className={cn(numTd, "text-xs", color(c.main_net))}>{fmtNet(c.main_net)}</td>
+      <td className={cn(numTd, "text-xs", color(c.pct_60d))}>{pct(c.pct_60d)}</td>
+      <td className={cn(numTd, "text-xs text-muted-foreground")}>{yi(c.mcap)}</td>
       <td className="px-2 py-2.5">
         {c.flags.map((f) => (
           <span key={f} className="mr-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-500">{f}</span>
         ))}
       </td>
-      <td className="px-2 py-2.5"><PoolBtn c={c} /></td>
+      <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}><PoolBtn c={c} /></td>
     </tr>
   );
   const DetailHead = ({ showIndustry = true }: { showIndustry?: boolean }) => (
@@ -580,14 +587,11 @@ export function ReviewPool() {
             <p className="py-10 text-center text-sm text-muted-foreground/60">扫描中…</p>
           ) : view === "rank" ? (
             sorted.length === 0 ? empty : (
-              <div className="overflow-x-auto">
+              <div className={scrollWrap}>
                 <table className="w-full text-sm">
-                  <thead><DetailHead /></thead>
-                  <tbody>{sorted.slice(0, 100).map((c) => <DetailRow key={c.code} c={c} />)}</tbody>
+                  <thead className={theadCls}><DetailHead /></thead>
+                  <tbody>{sorted.map((c) => <DetailRow key={c.code} c={c} />)}</tbody>
                 </table>
-                {sorted.length > 100 && (
-                  <p className="mt-2 text-center text-xs text-muted-foreground/60">只显示前 100 条，可用过滤条件收窄。</p>
-                )}
               </div>
             )
           ) : view === "industry" ? (
@@ -622,16 +626,16 @@ export function ReviewPool() {
             )
           ) : view === "fund" ? (
             sorted.length === 0 ? empty : (
-              <div className="overflow-x-auto">
+              <div className={scrollWrap}>
                 <table className="w-full text-sm">
-                  <thead>
+                  <thead className={theadCls}>
                     <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
                       <th className="whitespace-nowrap px-2 py-2 font-medium">名称</th>
                       <th className="whitespace-nowrap px-2 py-2 font-medium">行业</th>
                       <SortTh k="score" label="综合" />
                       <SortTh k="main_net" label="主力净额" />
-                      <th className="whitespace-nowrap px-2 py-2 font-medium">超大单</th>
-                      <th className="whitespace-nowrap px-2 py-2 font-medium">净占比%</th>
+                      <th className="whitespace-nowrap px-2 py-2 text-right font-medium">超大单</th>
+                      <th className="whitespace-nowrap px-2 py-2 text-right font-medium">净占比%</th>
                       <th className="whitespace-nowrap px-2 py-2 font-medium">资金</th>
                       <SortTh k="pct" label="涨跌%" />
                       <SortTh k="amount" label="成交额" />
@@ -640,19 +644,19 @@ export function ReviewPool() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sorted.slice(0, 100).map((c) => (
-                      <tr key={c.code} className="border-b border-border/30">
+                    {sorted.map((c) => (
+                      <tr key={c.code} className={rowCls} onClick={() => setDetail(c)} title="点击查看详情">
                         <NameCell c={c} />
                         <td className="max-w-32 truncate px-2 py-2.5 text-xs text-muted-foreground">{c.industry || "—"}</td>
                         <ScoreCell c={c} />
-                        <td className={cn("px-2 py-2.5 font-mono", color(c.main_net))}>{fmtNet(c.main_net)}</td>
-                        <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.super_net))}>{fmtNet(c.super_net)}</td>
-                        <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.main_pct))}>{c.main_pct == null ? "—" : `${c.main_pct}%`}</td>
+                        <td className={cn(numTd, color(c.main_net))}>{fmtNet(c.main_net)}</td>
+                        <td className={cn(numTd, "text-xs", color(c.super_net))}>{fmtNet(c.super_net)}</td>
+                        <td className={cn(numTd, "text-xs", color(c.main_pct))}>{c.main_pct == null ? "—" : `${c.main_pct}%`}</td>
                         <td className="px-2 py-2.5"><FundBar v={c.main_net} /></td>
-                        <td className={cn("px-2 py-2.5 font-mono", color(c.pct))}>{pct(c.pct)}</td>
-                        <td className="px-2 py-2.5 font-mono text-muted-foreground">{yi(c.amount)}</td>
+                        <td className={cn(numTd, color(c.pct))}>{pct(c.pct)}</td>
+                        <td className={cn(numTd, "text-muted-foreground")}>{yi(c.amount)}</td>
                         <td className="px-2 py-2.5"><StrategyChips c={c} /></td>
-                        <td className="px-2 py-2.5"><PoolBtn c={c} /></td>
+                        <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}><PoolBtn c={c} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -678,7 +682,7 @@ export function ReviewPool() {
                   <tbody>
                     {reviewRows.map((c) => (
                       <Fragment key={c.code}>
-                        <tr className="border-b border-border/20">
+                        <tr className={rowCls} onClick={() => setDetail(c)} title="点击查看详情">
                           <NameCell c={c} />
                           <td className="max-w-32 truncate px-2 py-2.5 text-xs text-muted-foreground">{c.industry || "—"}</td>
                           <td className="px-2 py-2.5"><StrategyChips c={c} /></td>
@@ -687,7 +691,7 @@ export function ReviewPool() {
                           <td className="px-2 py-2.5 text-xs text-muted-foreground">
                             {c.pool_history.length} 次 · 成熟 {c.pool_history.filter((h) => h.mature).length}
                           </td>
-                          <td className="px-2 py-2.5"><PoolBtn c={c} /></td>
+                          <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}><PoolBtn c={c} /></td>
                         </tr>
                         {c.pool_history.map((h) => (
                           <tr key={`${c.code}-${h.entry_date}`} className="border-b border-border/30 bg-muted/20 text-xs">
@@ -835,6 +839,118 @@ export function ReviewPool() {
             )}
           </GlassCard>
         </>
+      )}
+
+      {/* 右侧详情栏：点击候选行打开（因子拆解条形图 / 关键数据 / 入池历史 / 问 AI） */}
+      {detail && (
+        <aside className="fixed right-0 top-0 z-50 flex h-full w-[400px] flex-col gap-4 overflow-y-auto border-l border-border bg-background/95 p-5 shadow-2xl backdrop-blur">
+          <div className="flex items-start justify-between">
+            <div>
+              <h2 className="text-lg font-bold">
+                {detail.name}
+                <span className="ml-2 font-mono text-sm font-normal text-muted-foreground">{detail.code}</span>
+              </h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {detail.industry || "—"}
+                {detail.market && detail.market !== "A" && <span className="ml-1.5 rounded bg-sky-500/15 px-1 py-0.5 text-[10px] text-sky-500">{detail.market}</span>}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div onClick={(e) => e.stopPropagation()}><PoolBtn c={detail} /></div>
+              <button onClick={() => setDetail(null)} className="text-muted-foreground hover:text-foreground" title="关闭">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* 综合分 + 因子拆解条形图 */}
+          <div className="rounded-lg border border-border/40 p-3">
+            <div className="mb-2 flex items-baseline gap-2">
+              <span className={cn("font-mono text-3xl font-bold", scoreColor(detail.score ?? 0))}>{detail.score ?? "—"}</span>
+              <span className="text-xs text-muted-foreground">综合分 · 权重 趋势25 量能25 资金20 估值15 行业15</span>
+            </div>
+            <div className="space-y-1.5">
+              {(["trend", "volume", "fund", "valuation", "industry"] as const).map((k) => (
+                <div key={k} className="flex items-center gap-2">
+                  <span className="w-8 shrink-0 text-xs text-muted-foreground">{FACTOR_NAME[k]}</span>
+                  <div className="h-2 flex-1 overflow-hidden rounded bg-muted/40">
+                    <div className="h-full rounded bg-primary/70" style={{ width: `${detail.factors?.[k] ?? 0}%` }} />
+                  </div>
+                  <span className="w-8 shrink-0 text-right font-mono text-xs text-muted-foreground">{detail.factors?.[k] ?? "—"}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 命中策略 + 提示 */}
+          <div className="flex flex-wrap gap-1">
+            <StrategyChips c={detail} />
+            {detail.flags.map((f) => (
+              <span key={f} className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-500">{f}</span>
+            ))}
+          </div>
+
+          {/* 关键数据 */}
+          <div className="grid grid-cols-3 gap-x-3 gap-y-2 rounded-lg border border-border/40 p-3 text-sm">
+            {([
+              ["股价", <span className="font-mono">{detail.price ?? "—"}</span>],
+              ["涨跌%", <span className={cn("font-mono", color(detail.pct))}>{pct(detail.pct)}</span>],
+              ["开盘%", <span className={cn("font-mono", color(detail.open_pct))}>{pct(detail.open_pct)}</span>],
+              ["5日%", <span className={cn("font-mono", color(detail.pct_5d))}>{pct(detail.pct_5d)}</span>],
+              ["60日%", <span className={cn("font-mono", color(detail.pct_60d))}>{pct(detail.pct_60d)}</span>],
+              ["年初至今", <span className={cn("font-mono", color(detail.pct_ytd))}>{pct(detail.pct_ytd)}</span>],
+              ["成交额", <span className="font-mono">{yi(detail.amount)}</span>],
+              ["换手%", <span className="font-mono">{detail.turnover ?? "—"}</span>],
+              ["量比", <span className="font-mono">{detail.vol_ratio ?? "—"}</span>],
+              ["PE(TTM)", <span className="font-mono">{detail.pe_ttm ?? "—"}</span>],
+              ["PB", <span className="font-mono">{detail.pb ?? "—"}</span>],
+              ["市值", <span className="font-mono">{yi(detail.mcap)}</span>],
+              ["主力净额", <span className={cn("font-mono", color(detail.main_net))}>{fmtNet(detail.main_net)}</span>],
+              ["超大单", <span className={cn("font-mono", color(detail.super_net))}>{fmtNet(detail.super_net)}</span>],
+              ["净占比%", <span className={cn("font-mono", color(detail.main_pct))}>{detail.main_pct ?? "—"}</span>],
+            ] as [string, React.ReactNode][]).map(([label, val]) => (
+              <div key={label}>
+                <p className="text-[11px] text-muted-foreground">{label}</p>
+                {val}
+              </div>
+            ))}
+          </div>
+
+          {/* 入池历史 */}
+          <div className="rounded-lg border border-border/40 p-3">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">历次入池表现</p>
+            {detail.pool_history.length === 0 ? (
+              <p className="text-xs text-muted-foreground/60">该票还没进过复盘池。</p>
+            ) : (
+              <div className="space-y-2 text-xs">
+                {detail.pool_history.map((h) => (
+                  <div key={h.entry_date} className="rounded bg-muted/20 px-2 py-1.5">
+                    <p className="text-muted-foreground">
+                      {h.entry_date} 入池 @{h.entry_price}
+                      {h.tag && <span className={cn("ml-1.5 rounded px-1 py-0.5 text-[10px]", TAG_STYLE[h.tag])}>{h.tag}</span>}
+                      <span className="ml-1.5">{h.mature ? "成熟" : "待成熟"}</span>
+                    </p>
+                    <p className="mt-0.5">
+                      {(["d1", "d3", "d5", "d10"] as const).map((k, i) => (
+                        <span key={k} className="mr-3 text-muted-foreground">
+                          {["1D", "3D", "5D", "10D"][i]} <span className={cn("font-mono", color(h.perf[k]))}>{pct(h.perf[k])}</span>
+                        </span>
+                      ))}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div onClick={(e) => e.stopPropagation()}>
+            <AskAiButton
+              context={`个股候选详情：\n${candLine(detail)}${detail.pool_history.length ? "\n历次入池：\n" + detail.pool_history.map((h) => `${h.entry_date}@${h.entry_price} 1D:${pct(h.perf.d1)} 3D:${pct(h.perf.d3)} 5D:${pct(h.perf.d5)} 10D:${pct(h.perf.d10)}`).join("\n") : ""}`}
+              label="问 AI 这只票"
+              suggestions={["这只票的量价结构怎么看", "它的主要风险点是什么", "和同行业候选比它突出在哪"]}
+            />
+          </div>
+        </aside>
       )}
 
       <Disclaimer />
