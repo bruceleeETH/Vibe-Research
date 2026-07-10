@@ -62,10 +62,11 @@ def test_objective_flags():
 
 @pytest.fixture()
 def scan_isolated(monkeypatch, tmp_path):
-    """scan 离线隔离：资金兜底/行业强度不出网，复盘池文件不读真实缓存。"""
+    """scan 离线隔离：资金兜底/行业强度不出网，复盘池与磁盘缓存不碰真实文件。"""
     monkeypatch.setattr(screener, "fund_snapshot", lambda: {})
     monkeypatch.setattr(screener, "industry_strength", lambda: {})
     monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))
+    monkeypatch.setattr(screener, "_SCAN_CACHE_FILE", str(tmp_path / "scancache.json"))
     screener._CACHE.clear()
     return monkeypatch
 
@@ -148,6 +149,39 @@ def test_scan_market_pool_params(scan_isolated):
     assert {m["key"] for m in out["markets"]} == {"A", "HK", "US", "ETF"}
     out2 = screener.scan(market="HK", pool="cyb", force=True)   # 池仅对 A 股生效
     assert out2["pool"] == "all"
+
+
+def test_in_session_and_ttl():
+    from datetime import datetime as _dt
+    fri_10 = _dt(2026, 7, 10, 10, 0, tzinfo=screener.BEIJING).timestamp()   # 周五盘中
+    fri_16 = _dt(2026, 7, 10, 16, 0, tzinfo=screener.BEIJING).timestamp()   # 周五收盘后
+    fri_22 = _dt(2026, 7, 10, 22, 0, tzinfo=screener.BEIJING).timestamp()   # 周五夜（美盘时段）
+    sat_11 = _dt(2026, 7, 11, 11, 0, tzinfo=screener.BEIJING).timestamp()   # 周六
+    assert screener._in_session("A", fri_10) and not screener._in_session("A", fri_16)
+    assert not screener._in_session("A", sat_11)
+    assert screener._in_session("US", fri_22) and not screener._in_session("US", fri_10)
+    # TTL：盘中 5 分钟；盘中生成的缓存收盘后先按 5 分钟过期（刷收盘定格）；盘后缓存 6 小时
+    assert screener._ttl_for("A", fri_10, fri_10 + 60) == screener._TTL
+    assert screener._ttl_for("A", fri_10, fri_16) == screener._TTL
+    assert screener._ttl_for("A", fri_16, sat_11) == screener._OFF_TTL
+
+
+def test_scan_stale_while_revalidate(scan_isolated):
+    """缓存过期 → 立即返回旧数据（带 stale 标记）并触发一次后台刷新（单飞）。"""
+    import time as _time
+    key = "scan:A:all"
+    old = {"generated_at": "x", "scanned": 1, "market": "A", "pool": "all", "pool_note": "",
+           "markets": [], "pools": [], "strategies": [], "candidates": []}
+    screener._CACHE[key] = (_time.time() - 8 * 3600, old)     # 8 小时前 → 无论何时都过期
+    calls = []
+    scan_isolated.setattr(screener, "_bg_refresh", lambda k, m, p: calls.append(k))
+    out = screener.scan()
+    assert out.get("stale") is True and out["scanned"] == 1
+    assert calls == [key]
+    # 未过期 → 直接命中，无 stale
+    screener._CACHE[key] = (_time.time(), old)
+    scan_isolated.setattr(screener, "_in_session", lambda m, ts: True)
+    assert "stale" not in screener.scan()
 
 
 def test_open_pct():
@@ -345,6 +379,7 @@ def test_api_scan_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(screener, "fund_snapshot", lambda: {})
     monkeypatch.setattr(screener, "industry_strength", lambda: {})
     monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))
+    monkeypatch.setattr(screener, "_SCAN_CACHE_FILE", str(tmp_path / "scancache.json"))
     screener._CACHE.clear()
     r = client.get("/api/review/scan?refresh=1")
     assert r.status_code == 200

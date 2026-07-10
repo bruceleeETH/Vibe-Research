@@ -234,6 +234,7 @@ export interface ScanCandidate {
 }
 export interface ScanResult {
   generated_at: string; scanned: number;
+  stale?: boolean;   // 缓存过期：本次返回旧数据，后端正在后台刷新
   market: string; pool: string; pool_note: string;
   markets: { key: string; name: string }[];
   pools: { key: string; name: string }[];

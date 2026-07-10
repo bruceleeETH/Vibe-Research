@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus, RefreshCw, X, ClipboardList, ScanSearch, Tag,
   ArrowUpDown, ArrowUp, ArrowDown, ChevronDown, ChevronRight,
@@ -88,11 +88,24 @@ export function ReviewPool() {
   const [manualInput, setManualInput] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
-  const loadScan = (refresh = false, m = market, p = stockPool) => {
+  // 当前市场/池的引用：stale 自动重取时校验，避免切换市场后被旧请求覆盖
+  const currentKey = useRef("A:all");
+
+  const loadScan = (refresh = false, m = market, p = stockPool, retry = 0) => {
+    currentKey.current = `${m}:${p}`;
     setScanLoading(true);
     setErr(null);
     api.reviewScan(m, p, refresh)
-      .then(setScan)
+      .then((d) => {
+        if (currentKey.current !== `${m}:${p}`) return;   // 已切换市场/池，丢弃
+        setScan(d);
+        // 后端返回 stale = 旧数据 + 正在后台刷新 → 几秒后自动重取（最多 3 次）
+        if (d.stale && retry < 3) {
+          setTimeout(() => {
+            if (currentKey.current === `${m}:${p}`) loadScan(false, m, p, retry + 1);
+          }, 6000);
+        }
+      })
       .catch((e) => setErr(e.message))
       .finally(() => setScanLoading(false));
   };
@@ -424,6 +437,7 @@ export function ReviewPool() {
           ))}
         </div>
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          {scan?.stale && <span className="text-amber-500">数据更新中，先展示上次结果…</span>}
           {scan && <span>扫描 {scan.generated_at} · 全市场 {scan.scanned} 只</span>}
           {pool && <span>复盘样本 {pool.total} 条 · 成熟 {pool.mature_count}</span>}
         </div>

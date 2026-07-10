@@ -11,6 +11,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import threading
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -18,7 +21,60 @@ import astock
 
 BEIJING = timezone(timedelta(hours=8))
 _CACHE: dict = {}
-_TTL = 300  # 5 分钟，同 market.py 口径
+_TTL = 300            # 盘中 5 分钟，同 market.py 口径
+_OFF_TTL = 6 * 3600   # 收盘后 6 小时（数据已定格；盘中生成的缓存收盘后先刷一次再进长缓存）
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SCAN_CACHE_FILE = os.path.join(_HERE, ".cache", "scancache.json")
+_REFRESH_LOCK = threading.Lock()
+_REFRESHING: set[str] = set()   # stale-while-revalidate 单飞：同一 key 只跑一个后台刷新
+
+
+def _load_disk_cache() -> None:
+    """启动时恢复扫描缓存（--reload / 重启后不丢，避免冷启动全量重扫）。"""
+    try:
+        with open(_SCAN_CACHE_FILE, encoding="utf-8") as f:
+            for k, (ts, res) in json.load(f).items():
+                _CACHE[k] = (ts, res)
+    except Exception:
+        pass
+
+
+def _save_disk_cache() -> None:
+    try:
+        os.makedirs(os.path.dirname(_SCAN_CACHE_FILE), exist_ok=True)
+        data = {k: v for k, v in _CACHE.items() if k.startswith("scan:")}
+        tmp = _SCAN_CACHE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, _SCAN_CACHE_FILE)
+    except Exception:
+        pass
+
+
+def _in_session(market: str, ts: float) -> bool:
+    """粗粒度交易时段判断（北京时间，含竞价/收盘缓冲）。宽口径：误判成盘中只是多刷新。"""
+    t = datetime.fromtimestamp(ts, BEIJING)
+    wd, hm = t.weekday(), t.hour * 60 + t.minute
+    if market in ("A", "ETF"):
+        return wd <= 4 and 9 * 60 + 10 <= hm <= 15 * 60 + 10
+    if market == "HK":
+        return wd <= 4 and 9 * 60 + 25 <= hm <= 16 * 60 + 15
+    if market == "US":  # 美盘=北京时间夜里（覆盖冬夏令时：21:00 起，至次日 05:10）
+        if hm >= 21 * 60:
+            return wd <= 4                    # 周一~五晚
+        if hm <= 5 * 60 + 10:
+            return 1 <= wd <= 5               # 周二~六凌晨
+        return False
+    return True
+
+
+def _ttl_for(market: str, cached_at: float, now: float) -> int:
+    """缓存有效期：盘中 5 分钟；收盘后 6 小时——但盘中生成的缓存在收盘后先按
+    5 分钟过期（强制刷一次拿到收盘定格价），之后的盘后缓存才进 6 小时长周期。"""
+    if _in_session(market, now):
+        return _TTL
+    return _TTL if _in_session(market, cached_at) else _OFF_TTL
 
 
 # ---------------------------------------------------------------------------
@@ -300,13 +356,23 @@ def _pct_rank(sorted_vals: list[float], v: float) -> float:
 
 
 def industry_strength() -> dict[str, float]:
-    """全行业当日涨幅 {行业名: 涨跌幅%}（东财行业板块，行业因子用）。失败返回 {}。"""
+    """全行业当日涨幅 {行业名: 涨跌幅%}（东财行业板块，行业因子用）。失败返回 {}。
+
+    缓存 5 分钟：多次扫描/多市场共用一份，不再每次扫描都串行多拉一次。
+    """
+    now = time.time()
+    hit = _CACHE.get("ind_strength")
+    if hit and now - hit[0] < _TTL:
+        return hit[1]
     try:
         data = astock.industry_comparison(top_n=100)
         rows = (data.get("top") or []) + (data.get("bottom") or [])
-        return {r["name"]: float(r["change_pct"] or 0) for r in rows if r.get("name")}
+        out = {r["name"]: float(r["change_pct"] or 0) for r in rows if r.get("name")}
     except Exception:
         return {}
+    if out:
+        _CACHE["ind_strength"] = (now, out)
+    return out
 
 
 def attach_scores(candidates: list[dict], ind_pct: dict[str, float]) -> None:
@@ -354,10 +420,31 @@ def attach_scores(candidates: list[dict], ind_pct: dict[str, float]) -> None:
         c["score"] = round(sum(factors[k] * w for k, w in FACTOR_WEIGHTS.items()))
 
 
+def _bg_refresh(key: str, market: str, pool: str) -> None:
+    """后台刷新（单飞）：同一 key 同时只跑一个刷新线程，请求侧立即拿旧数据返回。"""
+    with _REFRESH_LOCK:
+        if key in _REFRESHING:
+            return
+        _REFRESHING.add(key)
+
+    def run():
+        try:
+            _do_scan(market, pool)
+        except Exception:
+            pass  # 刷新失败保留旧缓存，下次请求再触发
+        finally:
+            with _REFRESH_LOCK:
+                _REFRESHING.discard(key)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def scan(market: str = "A", pool: str = "all", force: bool = False) -> dict:
     """扫描指定市场（可选 A 股股票池）→ 候选清单（命中任一策略即入选）。
 
-    缓存 5 分钟（按 market+pool 分键）；force=True 强制重扫。空返回不缓存。
+    缓存策略：盘中 5 分钟 / 盘后 6 小时（见 _ttl_for）；缓存过期时**立即返回旧数据
+    并后台刷新**（stale-while-revalidate），只有全无缓存的冷启动才同步等待。
+    force=True 同步强制重扫。缓存随写落盘，重启不丢。
     """
     if market not in MARKETS:
         market = "A"
@@ -366,9 +453,18 @@ def scan(market: str = "A", pool: str = "all", force: bool = False) -> dict:
     now = time.time()
     key = f"scan:{market}:{pool}"
     hit = _CACHE.get(key)
-    if hit and not force and now - hit[0] < _TTL:
-        return hit[1]
+    if hit and not force:
+        if now - hit[0] < _ttl_for(market, hit[0], now):
+            return hit[1]
+        _bg_refresh(key, market, pool)          # 过期：旧数据立即返回，后台换新
+        return dict(hit[1], stale=True)
+    return _do_scan(market, pool)
 
+
+def _do_scan(market: str, pool: str) -> dict:
+    """实际扫描（同步、耗时）：全量快照 → 硬筛 → 资金/历史/评分，写缓存并落盘。"""
+    now = time.time()
+    key = f"scan:{market}:{pool}"
     rows = market_snapshot(market)
     codes, pool_note = pool_codes(pool)
     floors = MARKETS[market]["floors"]
@@ -430,4 +526,8 @@ def scan(market: str = "A", pool: str = "all", force: bool = False) -> dict:
     }
     if rows:
         _CACHE[key] = (now, result)
+        _save_disk_cache()
     return result
+
+
+_load_disk_cache()  # 模块加载时恢复上次扫描缓存（--reload / 重启后免冷启动全量重扫）
