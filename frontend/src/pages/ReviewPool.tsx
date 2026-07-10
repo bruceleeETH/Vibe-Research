@@ -1,14 +1,14 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus, RefreshCw, X, ClipboardList, ScanSearch, Tag,
-  ArrowUpDown, ArrowUp, ArrowDown, ChevronDown, ChevronRight,
+  ArrowUpDown, ArrowUp, ArrowDown, ChevronDown, ChevronRight, BarChart3,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { api, type ScanResult, type PoolData, type ScanCandidate, type PoolEntry } from "@/lib/api";
+import { api, type ScanResult, type PoolData, type ScanCandidate, type PoolEntry, type ReviewStats, type PerfAgg } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // A 股红涨绿跌（全站一致）
@@ -75,7 +75,9 @@ const POOLS_FALLBACK = [
 ];
 
 export function ReviewPool() {
-  const [tab, setTab] = useState<"scan" | "pool">("scan");
+  const [tab, setTab] = useState<"scan" | "pool" | "stats">("scan");
+  const [stats, setStats] = useState<ReviewStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [view, setView] = useState<View>("rank");
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [pool, setPool] = useState<PoolData | null>(null);
@@ -133,9 +135,14 @@ export function ReviewPool() {
       .catch((e) => setErr(e.message))
       .finally(() => setPoolLoading(false));
   };
+  const loadStats = () => {
+    setStatsLoading(true);
+    api.reviewStats().then(setStats).catch((e) => setErr(e.message)).finally(() => setStatsLoading(false));
+  };
   useEffect(() => {
     loadScan();
     loadPool();
+    loadStats();
   }, []);
 
   const poolCodesToday = useMemo(() => {
@@ -268,7 +275,20 @@ export function ReviewPool() {
   // ---- AskAI 上下文：随视角切换喂当前投影（客观数据，结论由用户模型给出）----
   const candLine = (c: ScanCandidate) =>
     `${c.name}(${c.code}) ${c.industry} 综合${c.score ?? "—"}分(${factorText(c)}) 价${c.price ?? "—"} 涨${pct(c.pct)} 开盘${pct(c.open_pct)} 5日${pct(c.pct_5d)} 成交${yi(c.amount)} 换手${c.turnover ?? "—"}% 量比${c.vol_ratio ?? "—"} PE${c.pe_ttm ?? "—"} 主力${fmtNet(c.main_net)} 60日${pct(c.pct_60d)} 命中[${c.strategies.map((s) => STRATEGY_NAME[s]).join("/")}]`;
+  const aggLine = (label: string, a?: PerfAgg | null) =>
+    a ? `${label}: 样本${a.n} 成熟${a.mature_n} 均值1D:${pct(a.avg.d1)} 3D:${pct(a.avg.d3)} 5D:${pct(a.avg.d5)} 10D:${pct(a.avg.d10)} d5胜率:${a.win5 ?? "待"}% 盈亏比:${a.pf5 ?? "待"} 超额d5:${pct(a.excess5)} MFE:${pct(a.mfe)} MAE:${pct(a.mae)}` : `${label}: 无`;
+
   const aiContext = useMemo(() => {
+    if (tab === "stats") {
+      if (!stats) return "统计尚未加载。";
+      return [
+        `策略表现统计（${stats.updated}，覆盖 ${stats.days} 个交易日，基准 ${stats.bench_name}）。${stats.note}`,
+        aggLine("影子样本(无选择偏差)", stats.shadow),
+        aggLine(`手动入池(${stats.manual_n}条)`, stats.manual),
+        ...Object.values(stats.by_strategy).map((s) => aggLine(`策略·${s.name}`, s)),
+        ...stats.by_score.map((b) => aggLine(`综合分${b.band}`, b)),
+      ].join("\n");
+    }
     if (tab === "pool") {
       const es = pool?.entries || [];
       if (!es.length) return "复盘池为空。";
@@ -293,10 +313,12 @@ export function ReviewPool() {
     if (!sorted.length) return "今日候选扫描暂无结果。";
     return `${head} ${view === "fund" ? "资金视角（按主力净额降序）" : "综合排序（命中策略数→成交额）"}，当前视图 ${sorted.length} 只：\n` +
       sorted.slice(0, 40).map(candLine).join("\n");
-  }, [tab, view, sorted, groups, reviewRows, scan, pool]);
+  }, [tab, view, sorted, groups, reviewRows, scan, pool, stats]);
 
   const aiSuggestions =
-    tab === "pool"
+    tab === "stats"
+      ? ["哪个策略的风险收益比最好", "手动挑选比影子样本强吗", "高分段是否显著跑赢低分段", "根据统计建议怎么调因子权重"]
+      : tab === "pool"
       ? ["帮我复盘这批票的整体表现", "哪类策略命中的票走得更好", "成熟样本里有什么共性"]
       : view === "industry"
         ? ["哪个板块的候选最值得细看", "候选扎堆的行业和今天板块资金一致吗", "各板块候选的量价有什么差异"]
@@ -423,13 +445,13 @@ export function ReviewPool() {
       <PageHeader
         title="复盘工作台"
         subtitle="阈值硬筛候选 → 五因子综合分 → 入池记录 → 1D/3D/5D/10D 真实表现回看。个人复盘工具，评分算法公开可调，数据只存本地。"
-        actions={<AskAiButton context={aiContext} label={tab === "pool" ? "让 AI 复盘" : "让 AI 读候选"} suggestions={aiSuggestions} />}
+        actions={<AskAiButton context={aiContext} label={tab === "stats" ? "让 AI 解读统计" : tab === "pool" ? "让 AI 复盘" : "让 AI 读候选"} suggestions={aiSuggestions} />}
       />
 
       {/* Tab 切换 + 状态条 */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div className="flex gap-1.5">
-          {([["scan", "候选扫描", ScanSearch], ["pool", "复盘池", ClipboardList]] as const).map(([k, label, Icon]) => (
+          {([["scan", "候选扫描", ScanSearch], ["pool", "复盘池", ClipboardList], ["stats", "策略表现", BarChart3]] as const).map(([k, label, Icon]) => (
             <button
               key={k}
               onClick={() => setTab(k)}
@@ -718,6 +740,90 @@ export function ReviewPool() {
             )
           )}
         </GlassCard>
+      ) : tab === "stats" ? (
+        <GlassCard glow>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <span className="flex items-center gap-1.5 font-semibold">
+                <BarChart3 className="h-4 w-4 text-primary" /> 策略表现
+              </span>
+              {stats && (
+                <span className="text-xs text-muted-foreground">
+                  覆盖 {stats.days} 个交易日 · 影子样本 {stats.shadow_total}（成熟 {stats.shadow_mature}）· 手动入池 {stats.manual_n} · 基准 {stats.bench_name} · {stats.updated}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => api.reviewSamplesCapture().then((r) => { toast.info(r.note || `已存档 ${r.captured} 条`); loadStats(); }).catch((e) => toast.error(e.message))}
+                className="rounded-lg bg-primary/10 px-2.5 py-1 text-xs text-primary hover:bg-primary/20"
+                title="收盘后调度器会自动存档，这里手动兜底"
+              >
+                存档今日候选
+              </button>
+              <button
+                onClick={() => api.reviewSamplesUpdate().then((r) => { toast.success(`已更新 ${r.updated} 条`); loadStats(); }).catch((e) => toast.error(e.message))}
+                className="rounded-lg bg-primary/10 px-2.5 py-1 text-xs text-primary hover:bg-primary/20"
+              >
+                更新样本收益
+              </button>
+              <button onClick={loadStats} disabled={statsLoading} className="text-muted-foreground hover:text-primary" title="刷新">
+                <RefreshCw className={cn("h-3.5 w-3.5", statsLoading && "animate-spin")} />
+              </button>
+            </div>
+          </div>
+
+          {!stats || (stats.shadow_total === 0 && stats.manual_n === 0) ? (
+            <p className="py-10 text-center text-sm text-muted-foreground/60">
+              还没有样本——影子样本会在每个交易日收盘后自动存档（也可点上方「存档今日候选」），满 10 个交易日开始出成熟统计。
+            </p>
+          ) : (
+            <div className="space-y-6">
+              {([
+                ["影子 vs 手动（你的挑选是否创造价值）", [
+                  ["影子样本（无选择偏差）", stats.shadow],
+                  [`手动入池（${stats.manual_n} 条）`, stats.manual],
+                ]],
+                ["分策略", Object.values(stats.by_strategy).map((s) => [s.name, s])],
+                ["分综合分段（验证评分有效性）", stats.by_score.map((b) => [`综合分 ${b.band}`, b])],
+              ] as [string, [string, PerfAgg][]][]).map(([title, rows]) => (
+                <div key={title}>
+                  <h4 className="mb-1.5 text-sm font-semibold">{title}</h4>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                          <th className="px-2 py-2 font-medium">组</th>
+                          {["样本", "成熟", "1D均", "3D均", "5D均", "10D均", "d5胜率", "盈亏比", "超额d5", "MFE均", "MAE均"].map((h) => (
+                            <th key={h} className="whitespace-nowrap px-2 py-2 text-right font-medium">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map(([label, a]) => (
+                          <tr key={label} className="border-b border-border/30 even:bg-white/[0.02]">
+                            <td className="px-2 py-2.5 font-medium">{label}</td>
+                            <td className={numTd}>{a.n}</td>
+                            <td className={numTd}>{a.mature_n}</td>
+                            {(["d1", "d3", "d5", "d10"] as const).map((k) => (
+                              <td key={k} className={cn(numTd, color(a.avg[k]))}>{pct(a.avg[k])}</td>
+                            ))}
+                            <td className={numTd}>{a.win5 == null ? "待" : `${a.win5}%`}</td>
+                            <td className={numTd}>{a.pf5 ?? "待"}</td>
+                            <td className={cn(numTd, color(a.excess5))}>{pct(a.excess5)}</td>
+                            <td className={cn(numTd, color(a.mfe))}>{pct(a.mfe)}</td>
+                            <td className={cn(numTd, color(a.mae))}>{pct(a.mae)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+              <p className="text-[11px] leading-relaxed text-muted-foreground/70">{stats.note}</p>
+            </div>
+          )}
+        </GlassCard>
       ) : (
         <>
           {/* 手动入池 */}
@@ -768,7 +874,7 @@ export function ReviewPool() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                      {["名称", "入池日", "策略", "入池价", "现价", "1D", "3D", "5D", "10D", "状态", "标签", ""].map((h) => (
+                      {["名称", "入池日", "策略", "信号收盘", "现价", "1D", "3D", "5D", "10D", "MFE", "MAE", "状态", "标签", ""].map((h) => (
                         <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
                       ))}
                     </tr>
@@ -791,11 +897,15 @@ export function ReviewPool() {
                             </span>
                           ))}
                         </td>
-                        <td className="px-2 py-2.5 font-mono text-muted-foreground">{e.entry_price || "—"}</td>
+                        <td className="px-2 py-2.5 font-mono text-muted-foreground" title={`点击入池价 ${e.entry_price || "—"} · 次日开盘 ${e.next_open ?? "待"}`}>
+                          {e.signal_close ?? "待"}
+                        </td>
                         <td className={cn("px-2 py-2.5 font-mono", color(e.change_pct))}>{e.price ?? "—"}</td>
                         {([e.perf.d1, e.perf.d3, e.perf.d5, e.perf.d10] as const).map((v, i) => (
                           <td key={i} className={cn("px-2 py-2.5 font-mono", color(v))}>{pct(v)}</td>
                         ))}
+                        <td className={cn("px-2 py-2.5 font-mono text-xs", color(e.mfe))}>{pct(e.mfe)}</td>
+                        <td className={cn("px-2 py-2.5 font-mono text-xs", color(e.mae))}>{pct(e.mae)}</td>
                         <td className="px-2 py-2.5">
                           <span className={cn(
                             "rounded px-1.5 py-0.5 text-[11px]",

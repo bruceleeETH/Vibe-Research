@@ -274,6 +274,44 @@ def test_calc_perf_mature():
     assert rp.calc_perf(10.0, closes)["d10"] == 90.0
 
 
+def _bar(date, close, high=None, low=None, open_=None):
+    return {"date": date, "open": open_ or close, "close": close,
+            "high": high or close, "low": low or close}
+
+
+def test_calc_metrics():
+    """统一口径：信号收盘基准 / 次日开盘 / MFE / MAE / 成熟判定。"""
+    bars = [_bar(f"2026-07-{12+i:02d}", 10.0 + i * 0.5, high=15.0 if i == 2 else None,
+                 low=8.0 if i == 4 else None, open_=10.3 if i == 0 else None) for i in range(11)]
+    m = rp.calc_metrics(10.0, bars)
+    assert m["perf"]["d1"] == 0.0                      # 首日收盘 10.0
+    assert m["perf"]["d5"] == 20.0                     # 12.0/10-1
+    assert m["next_open"] == 10.3                      # 次日开盘 = 可执行口径
+    assert m["mfe"] == 50.0                            # 窗口内最高 15.0
+    assert m["mae"] == -20.0                           # 窗口内最低 8.0
+    assert m["mature"] and m["perf"]["d10"] == 45.0
+    # 不足 10 日：未成熟，MFE/MAE 按已有 bar 计
+    m2 = rp.calc_metrics(10.0, bars[:2])
+    assert not m2["mature"] and m2["perf"]["d10"] is None
+    assert rp.calc_metrics(0.0, bars)["perf"]["d1"] is None   # 基准价异常不除零
+
+
+def test_signal_metrics_uses_signal_close(monkeypatch):
+    """信号日收盘=最后一根 ≤ entry_date 的收盘；之后的 bar 算 perf。"""
+    bars = [_bar("2026-07-09", 9.0), _bar("2026-07-10", 10.0),
+            _bar("2026-07-13", 11.0), _bar("2026-07-14", 12.0)]
+    monkeypatch.setattr(rp, "_bars", lambda code, secid="", market="A", count=30: bars)
+    m = rp.signal_metrics("600001", "2026-07-10")
+    assert m["signal_close"] == 10.0
+    assert m["perf"]["d1"] == 10.0                     # 11/10-1
+    # 周末入池（entry_date 非交易日）→ 用之前最近交易日收盘
+    m2 = rp.signal_metrics("600001", "2026-07-12")
+    assert m2["signal_close"] == 10.0
+    # 全部 bar 都晚于 entry_date（数据不足）→ None
+    monkeypatch.setattr(rp, "_bars", lambda code, secid="", market="A", count=30: bars[2:])
+    assert rp.signal_metrics("600001", "2026-07-10") is None
+
+
 # ---------------------------------------------------------------------------
 # 复盘池 CRUD（tmp 存储 + 打桩行情）
 # ---------------------------------------------------------------------------
@@ -284,7 +322,11 @@ def pool(tmp_path, monkeypatch):
     monkeypatch.setattr(rp, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(rp.astock, "tencent_quote",
                         lambda codes: {c: {"name": f"股{c}", "price": 10.0, "change_pct": 1.0} for c in codes})
-    monkeypatch.setattr(rp, "_closes_after", lambda code, entry_date, secid="", market="A": [10.5, 11.0])
+    monkeypatch.setattr(rp, "signal_metrics",
+                        lambda code, entry_date, secid="", market="A": {
+                            "perf": {"d1": 5.0, "d3": None, "d5": None, "d10": None},
+                            "next_open": 10.2, "mfe": 6.0, "mae": -2.0,
+                            "mature": False, "last_close": 10.5, "signal_close": 10.0})
     return rp
 
 
@@ -298,6 +340,8 @@ def test_pool_add_tag_remove(pool):
     e = d["entries"][0]
     assert e["entry_price"] == 10.0
     assert e["perf"]["d1"] == 5.0 and e["perf"]["d3"] is None
+    assert e["signal_close"] == 10.0 and e["next_open"] == 10.2
+    assert e["mfe"] == 6.0 and e["mae"] == -2.0
     assert e["status"] == "待成熟" and e["tag"] == ""
 
     assert pool.update_tag(e["id"], "重点关注", "缩量回踩")
@@ -331,17 +375,108 @@ def test_api_scan_bad_market_pool_400():
 
 def test_pool_mature_locks(pool, monkeypatch):
     pool.add_batch([{"code": "000001"}])
-    monkeypatch.setattr(pool, "_closes_after",
-                        lambda code, entry_date, secid="", market="A": [10.0 + i * 0.1 for i in range(12)])
+    monkeypatch.setattr(pool, "signal_metrics",
+                        lambda code, entry_date, secid="", market="A": {
+                            "perf": {"d1": 1.0, "d3": 3.0, "d5": 5.0, "d10": 9.0},
+                            "next_open": 10.1, "mfe": 12.0, "mae": -3.0,
+                            "mature": True, "last_close": 10.9, "signal_close": 10.0})
     e = pool.get_pool(refresh=True)["entries"][0]
-    # 第 10 个收盘 = 10.0 + 9*0.1 = 10.9 → +9.0%
     assert e["mature"] and e["status"] == "成熟" and e["perf"]["d10"] == 9.0
 
-    # 成熟后不再重拉 K 线（打桩成抛异常也不影响）
+    # 成熟且已是新口径 → 不再重拉 K 线（打桩成抛异常也不影响）
     def boom(code, entry_date, secid="", market="A"):
         raise AssertionError("成熟样本不应重拉行情")
-    monkeypatch.setattr(pool, "_closes_after", boom)
+    monkeypatch.setattr(pool, "signal_metrics", boom)
     assert pool.get_pool(refresh=True)["entries"][0]["perf"]["d10"] == 9.0
+
+
+# ---------------------------------------------------------------------------
+# 影子样本 + 策略表现统计
+# ---------------------------------------------------------------------------
+import samples as sp
+
+
+@pytest.fixture()
+def shadow(tmp_path, monkeypatch):
+    monkeypatch.setattr(sp, "SAMPLES_DIR", str(tmp_path / "samples"))
+    monkeypatch.setattr(sp, "is_trading_day", lambda d: True)
+    monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))
+    sp._STATS_CACHE[1] = None
+    sp._STATS_CACHE_EXTRA.clear()
+    return monkeypatch
+
+
+def _cand(code, strategies, amount, score=60):
+    return {"code": code, "name": f"股{code}", "market": "A", "secid": f"0.{code}",
+            "industry": "测试", "strategies": strategies, "flags": [], "score": score,
+            "factors": {}, "amount": amount, "pct": 5.0, "vol_ratio": 2.0,
+            "turnover": 5.0, "price": 10.0}
+
+
+def test_capture_today_caps_and_dedupes(shadow, monkeypatch):
+    cands = ([_cand(f"6001{i:02d}", ["volume_surge"], 1e8 * (50 - i)) for i in range(40)] +
+             [_cand("600000", ["volume_surge", "high_turnover"], 9e9)])   # 双命中去重
+    monkeypatch.setattr(sp.screener, "scan",
+                        lambda m="A", p="all", force=False: {"generated_at": "t", "candidates": cands})
+    r = sp.capture_today()
+    # volume_surge 按成交额 top30（含 600000）+ high_turnover 仅 600000（已去重）→ 30
+    assert r["captured"] == 30
+    assert sp.capture_today()["note"] == "今日已存档"   # 幂等
+    data = sp._load_day(sp._today())
+    e = data["entries"][0]
+    assert e["signal_close"] == 10.0 and e["mature"] is False
+
+
+def test_update_pending_and_stats(shadow, monkeypatch):
+    # 存一个历史日文件（两条样本：一条会成熟、一条数据缺失保持原样）
+    day = "2026-06-01"
+    entries = [dict(_cand("600001", ["volume_surge"], 5e8, score=75),
+                    signal_close=10.0, next_open=None, mfe=None, mae=None,
+                    perf={"d1": None, "d3": None, "d5": None, "d10": None}, mature=False),
+               dict(_cand("600002", ["high_turnover"], 3e8, score=45),
+                    signal_close=20.0, next_open=None, mfe=None, mae=None,
+                    perf={"d1": None, "d3": None, "d5": None, "d10": None}, mature=False)]
+    for e in entries:
+        e.pop("price")
+    import os
+    os.makedirs(sp.SAMPLES_DIR, exist_ok=True)
+    sp._save_day(day, {"date": day, "generated_at": "t", "entries": entries})
+
+    bars = [_bar(day, 10.0)] + [_bar(f"2026-06-{2+i:02d}", 10.0 + i + 1) for i in range(10)]
+    monkeypatch.setattr(sp.reviewpool, "_bars",
+                        lambda code, secid="", market="A", count=40: bars if code == "600001" else [])
+    assert sp.update_pending() == 1
+    e = sp._load_day(day)["entries"][0]
+    assert e["mature"] and e["perf"]["d10"] == 100.0   # 20/10-1
+
+    # 统计：基准打桩为每窗口 +1%
+    monkeypatch.setattr(sp, "bench_perf", lambda d: {"d1": 1.0, "d3": 1.0, "d5": 1.0, "d10": 1.0})
+    s = sp.stats()
+    assert s["shadow_total"] == 2 and s["shadow_mature"] == 1
+    vs = s["by_strategy"]["volume_surge"]
+    assert vs["n"] == 1 and vs["avg"]["d5"] == 50.0 and vs["win5"] == 100.0
+    assert vs["excess5"] == 49.0                       # 50 - 基准1
+    band70 = next(b for b in s["by_score"] if b["band"] == "70+")
+    assert band70["n"] == 1
+    assert s["manual"]["n"] == 0                       # 空池
+
+
+def test_bench_perf_from_index(shadow, monkeypatch):
+    bars = [_bar("2026-06-01", 100.0), _bar("2026-06-02", 101.0), _bar("2026-06-03", 102.0),
+            _bar("2026-06-04", 103.0), _bar("2026-06-05", 104.0), _bar("2026-06-08", 105.0)]
+    monkeypatch.setattr(sp, "_index_bars", lambda count=250: bars)
+    b = sp.bench_perf("2026-06-01")
+    assert b["d1"] == 1.0 and b["d5"] == 5.0 and b["d10"] is None
+    # 非交易日入池 → 用之前最近交易日为基准（06-05 收 104 → 06-08 收 105 = +0.96%）
+    assert sp.bench_perf("2026-06-06")["d1"] == 0.96
+
+
+def test_api_stats_shape(shadow, monkeypatch):
+    monkeypatch.setattr(sp, "bench_perf", lambda d: {"d1": None, "d3": None, "d5": None, "d10": None})
+    r = client.get("/api/review/stats")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert {"by_strategy", "by_score", "shadow", "manual", "days", "shadow_total", "note"} <= set(d)
 
 
 # ---------------------------------------------------------------------------

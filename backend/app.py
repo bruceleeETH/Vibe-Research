@@ -26,12 +26,15 @@ import portfolio as pf
 import market
 import myreports as mr
 import reviewpool as rp
+import samples
 import screener
 
 app = FastAPI(title="Vibe-Research API", version="0.1.1")
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
+# 影子样本：交易日收盘后自动存档候选 + 每日更新未成熟样本
+samples.start_scheduler()
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
@@ -675,6 +678,37 @@ def review_pool_remove(eid: str):
     if not rp.remove(eid):
         raise HTTPException(404, "记录不存在")
     return {"data": {"ok": True}}
+
+
+@app.get("/api/review/stats")
+def review_stats():
+    """策略表现统计：影子样本（无选择偏差）×手动入池对照，分策略/分数段。缓存 10 分钟。"""
+    try:
+        return {"data": samples.stats()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"表现统计异常：{e}") from e
+
+
+@app.post("/api/review/samples/capture")
+def review_samples_capture():
+    """手动触发今日影子样本存档（收盘后调度器会自动做，这里给手动兜底）。"""
+    try:
+        r = samples.capture_today()
+        samples.invalidate_stats()
+        return {"data": r}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"样本存档异常：{e}") from e
+
+
+@app.post("/api/review/samples/update")
+def review_samples_update():
+    """手动触发未成熟样本收益更新。"""
+    try:
+        n = samples.update_pending()
+        samples.invalidate_stats()
+        return {"data": {"updated": n}}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"样本更新异常：{e}") from e
 
 
 @app.get("/api/industry")

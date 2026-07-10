@@ -140,9 +140,10 @@ def em_daily_kline(secid: str, count: int = 30) -> list[dict]:
     out = []
     for line in (d.get("data") or {}).get("klines") or []:
         p = line.split(",")
-        if len(p) >= 3:
+        if len(p) >= 5:
             try:
-                out.append({"date": p[0], "open": float(p[1]), "close": float(p[2])})
+                out.append({"date": p[0], "open": float(p[1]), "close": float(p[2]),
+                            "high": float(p[3]), "low": float(p[4])})
             except ValueError:
                 continue
     return out

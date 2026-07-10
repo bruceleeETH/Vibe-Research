@@ -57,7 +57,7 @@ def _save(d: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def calc_perf(entry_price: float, closes_after: list[float]) -> dict:
-    """入池价 + 入池日之后的收盘序列 → {d1, d3, d5, d10}（百分比，不足天数为 None）。"""
+    """（旧口径，保留兼容）入池价 + 之后收盘序列 → {d1, d3, d5, d10}（%）。"""
     def _pct(n: int):
         if entry_price and len(closes_after) >= n:
             return round((closes_after[n - 1] / entry_price - 1) * 100, 2)
@@ -65,24 +65,65 @@ def calc_perf(entry_price: float, closes_after: list[float]) -> dict:
     return {"d1": _pct(1), "d3": _pct(3), "d5": _pct(5), "d10": _pct(10)}
 
 
+def calc_metrics(signal_close: float, bars_after: list[dict]) -> dict:
+    """统一收益口径（纯函数）：信号日收盘价为基准 + 信号日之后的日K（升序，含 OHLC）。
+
+    - perf.dN   = 第 N 个交易日收盘 / 信号日收盘 - 1（%）——策略口径
+    - next_open = 次日开盘价——可执行口径参考（你实际能买到的价）
+    - mfe / mae = 10 个交易日窗口内 最高/最低价 相对信号收盘的最大浮盈 / 最大回撤（%）
+    """
+    closes = [b["close"] for b in bars_after]
+
+    def _pct(n: int):
+        if signal_close and len(closes) >= n:
+            return round((closes[n - 1] / signal_close - 1) * 100, 2)
+        return None
+
+    win = bars_after[:10]
+    mfe = mae = None
+    if signal_close and win:
+        mfe = round((max(b.get("high") or b["close"] for b in win) / signal_close - 1) * 100, 2)
+        mae = round((min(b.get("low") or b["close"] for b in win) / signal_close - 1) * 100, 2)
+    return {
+        "perf": {"d1": _pct(1), "d3": _pct(3), "d5": _pct(5), "d10": _pct(10)},
+        "next_open": (win[0].get("open") if win else None),
+        "mfe": mfe, "mae": mae,
+        "mature": len(closes) >= 10,
+        "last_close": closes[-1] if closes else None,
+    }
+
+
 def _default_secid(code: str) -> str:
     """6 位 A 股/ETF 代码 → 东财 secid（5/6/9 开头沪市，其余深市）。"""
     return f"{'1' if code[:1] in ('5', '6', '9') else '0'}.{code}"
 
 
-def _closes_after(code: str, entry_date: str, secid: str = "", market: str = "A") -> list[float]:
-    """入池日之后（严格大于 entry_date）的日收盘序列，升序。取不到返回 []。
-
-    A 股个股走腾讯日K（无限流）；ETF / 港股 / 美股走东财通用日K（secid）。
-    """
+def _bars(code: str, secid: str = "", market: str = "A", count: int = 30) -> list[dict]:
+    """日K（升序，含 OHLC）。A 股个股走腾讯（无限流）；ETF/港/美走东财通用日K。"""
     try:
         if market == "A" and len(code) == 6 and code.isdigit():
-            bars = astock.tencent_daily_kline(code, count=30)
-        else:
-            bars = astock.em_daily_kline(secid or _default_secid(code), count=30)
+            return astock.tencent_daily_kline(code, count=count)
+        return astock.em_daily_kline(secid or _default_secid(code), count=count)
     except Exception:
         return []
-    return [b["close"] for b in bars if b["date"] > entry_date]
+
+
+def signal_metrics(code: str, entry_date: str, secid: str = "", market: str = "A") -> dict | None:
+    """按统一口径计算一条入池记录的指标。行情取不到返回 None（保留旧值下次再试）。"""
+    bars = _bars(code, secid, market)
+    if not bars:
+        return None
+    signal_close = None
+    for b in bars:                       # 升序：最后一根 ≤ entry_date 的收盘 = 信号日收盘
+        if b["date"] <= entry_date:
+            signal_close = b["close"]
+        else:
+            break
+    if not signal_close:
+        return None
+    m = calc_metrics(signal_close, [b for b in bars if b["date"] > entry_date])
+    m["signal_close"] = signal_close
+    return m
 
 
 # ---------------------------------------------------------------------------
@@ -202,18 +243,23 @@ def get_pool(refresh: bool = False) -> dict:
     today = _today()
     dirty = False
     for e in entries:
-        if e.get("mature"):
+        migrated = "signal_close" in e            # 旧数据（点击价口径）→ 强制按新口径重算一次
+        if e.get("mature") and migrated:
             continue
-        if not refresh and e.get("perf_asof") == today:
+        if not refresh and e.get("perf_asof") == today and migrated:
             continue
-        closes = _closes_after(e["code"], e["entry_date"], e.get("secid", ""), e.get("market", "A"))
-        if not closes and not refresh:
-            continue  # 行情源暂不可用：保留旧值，明天再试
-        e["perf"] = calc_perf(e["entry_price"], closes)
-        e["mature"] = e["perf"]["d10"] is not None
+        m = signal_metrics(e["code"], e["entry_date"], e.get("secid", ""), e.get("market", "A"))
+        if m is None:
+            continue  # 行情源暂不可用：保留旧值，下次再试
+        e["perf"] = m["perf"]
+        e["mature"] = m["mature"]
+        e["signal_close"] = m["signal_close"]
+        e["next_open"] = m["next_open"]
+        e["mfe"] = m["mfe"]
+        e["mae"] = m["mae"]
+        if m["last_close"] is not None:
+            e["last_close"] = m["last_close"]
         e["perf_asof"] = today
-        if closes:
-            e["last_close"] = closes[-1]
         dirty = True
     if dirty:
         with _LOCK:
@@ -229,6 +275,10 @@ def get_pool(refresh: bool = False) -> dict:
             **{k: e[k] for k in ("id", "code", "name", "entry_date", "entry_price",
                                  "strategies", "tag", "note", "perf", "mature")},
             "market": e.get("market", "A"),
+            "signal_close": e.get("signal_close"),
+            "next_open": e.get("next_open"),
+            "mfe": e.get("mfe"),
+            "mae": e.get("mae"),
             "price": q.get("price") or e.get("last_close"),
             "change_pct": q.get("change_pct"),
             "status": "成熟" if e.get("mature") else "待成熟",

@@ -244,9 +244,28 @@ export interface PoolPerf { d1: number | null; d3: number | null; d5: number | n
 export interface PoolEntry {
   id: string; code: string; name: string; market: string;
   entry_date: string; entry_price: number;
+  signal_close: number | null;   // 信号日收盘（策略口径基准）
+  next_open: number | null;      // 次日开盘（可执行口径参考）
+  mfe: number | null; mae: number | null;   // 10日窗口最大浮盈 / 最大回撤 %
   strategies: string[]; tag: string; note: string;
   perf: PoolPerf; mature: boolean;
   price: number | null; change_pct: number | null; status: string;
+}
+
+// 策略表现统计（影子样本 × 手动入池）
+export interface PerfAgg {
+  n: number; mature_n: number;
+  avg: { d1: number | null; d3: number | null; d5: number | null; d10: number | null };
+  win5: number | null; pf5: number | null; excess5: number | null;
+  mfe: number | null; mae: number | null;
+}
+export interface ReviewStats {
+  updated: string; days: number;
+  shadow_total: number; shadow_mature: number;
+  by_strategy: Record<string, PerfAgg & { name: string }>;
+  by_score: (PerfAgg & { band: string })[];
+  shadow: PerfAgg; manual: PerfAgg; manual_n: number;
+  bench_name: string; note: string;
 }
 export interface PoolData {
   entries: PoolEntry[]; total: number; mature_count: number;
@@ -317,6 +336,9 @@ export const api = {
   reviewPoolTag: (id: string, tag: string, note: string) =>
     request<{ ok: boolean }>("/review/pool/tag", "POST", { id, tag, note }),
   reviewPoolRemove: (id: string) => request<{ ok: boolean }>(`/review/pool/${id}`, "DELETE"),
+  reviewStats: () => get<ReviewStats>("/review/stats"),
+  reviewSamplesCapture: () => request<{ captured: number; note: string }>("/review/samples/capture", "POST"),
+  reviewSamplesUpdate: () => request<{ updated: number }>("/review/samples/update", "POST"),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string) =>
     request<MyReport>("/myreports", "POST", { name, content_b64: contentB64 }),
