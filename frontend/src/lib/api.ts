@@ -226,6 +226,7 @@ export interface ScanCandidate {
   mcap: number | null; industry: string;
   main_net: number | null; super_net: number | null; main_pct: number | null;
   pct_60d: number | null; pct_ytd: number | null;
+  pct_5d: number | null; open_pct: number | null;
   strategies: string[]; flags: string[];
   pool_history: PoolHistoryItem[];
   score: number;

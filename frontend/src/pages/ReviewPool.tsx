@@ -47,7 +47,7 @@ const VIEWS: { key: View; label: string }[] = [
 ];
 
 // 可点击排序的数值列
-type SortKey = "score" | "pct" | "amount" | "turnover" | "vol_ratio" | "pe_ttm" | "main_net" | "mcap" | "pct_60d";
+type SortKey = "score" | "price" | "pct" | "open_pct" | "pct_5d" | "amount" | "turnover" | "vol_ratio" | "pe_ttm" | "main_net" | "mcap" | "pct_60d";
 
 const FACTOR_NAME: Record<string, string> = {
   trend: "趋势", volume: "量能", fund: "资金", valuation: "估值", industry: "行业",
@@ -247,7 +247,7 @@ export function ReviewPool() {
 
   // ---- AskAI 上下文：随视角切换喂当前投影（客观数据，结论由用户模型给出）----
   const candLine = (c: ScanCandidate) =>
-    `${c.name}(${c.code}) ${c.industry} 综合${c.score ?? "—"}分(${factorText(c)}) 涨${pct(c.pct)} 成交${yi(c.amount)} 换手${c.turnover ?? "—"}% 量比${c.vol_ratio ?? "—"} PE${c.pe_ttm ?? "—"} 主力${fmtNet(c.main_net)} 60日${pct(c.pct_60d)} 命中[${c.strategies.map((s) => STRATEGY_NAME[s]).join("/")}]`;
+    `${c.name}(${c.code}) ${c.industry} 综合${c.score ?? "—"}分(${factorText(c)}) 价${c.price ?? "—"} 涨${pct(c.pct)} 开盘${pct(c.open_pct)} 5日${pct(c.pct_5d)} 成交${yi(c.amount)} 换手${c.turnover ?? "—"}% 量比${c.vol_ratio ?? "—"} PE${c.pe_ttm ?? "—"} 主力${fmtNet(c.main_net)} 60日${pct(c.pct_60d)} 命中[${c.strategies.map((s) => STRATEGY_NAME[s]).join("/")}]`;
   const aiContext = useMemo(() => {
     if (tab === "pool") {
       const es = pool?.entries || [];
@@ -351,7 +351,10 @@ export function ReviewPool() {
       {showIndustry && <td className="max-w-32 truncate px-2 py-2.5 text-xs text-muted-foreground">{c.industry || "—"}</td>}
       <td className="px-2 py-2.5"><StrategyChips c={c} /></td>
       <ScoreCell c={c} />
+      <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.price ?? "—"}</td>
       <td className={cn("px-2 py-2.5 font-mono", color(c.pct))}>{pct(c.pct)}</td>
+      <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.open_pct))}>{pct(c.open_pct)}</td>
+      <td className={cn("px-2 py-2.5 font-mono text-xs", color(c.pct_5d))}>{pct(c.pct_5d)}</td>
       <td className="px-2 py-2.5 font-mono text-muted-foreground">{yi(c.amount)}</td>
       <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.turnover ?? "—"}</td>
       <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.vol_ratio ?? "—"}</td>
@@ -373,7 +376,10 @@ export function ReviewPool() {
       {showIndustry && <th className="whitespace-nowrap px-2 py-2 font-medium">行业</th>}
       <th className="whitespace-nowrap px-2 py-2 font-medium">命中策略</th>
       <SortTh k="score" label="综合" />
+      <SortTh k="price" label="股价" />
       <SortTh k="pct" label="涨跌%" />
+      <SortTh k="open_pct" label="开盘%" />
+      <SortTh k="pct_5d" label="5日%" />
       <SortTh k="amount" label="成交额" />
       <SortTh k="turnover" label="换手%" />
       <SortTh k="vol_ratio" label="量比" />

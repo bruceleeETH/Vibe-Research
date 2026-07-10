@@ -150,6 +150,13 @@ def test_scan_market_pool_params(scan_isolated):
     assert out2["pool"] == "all"
 
 
+def test_open_pct():
+    assert screener._open_pct(10.5, 10.0) == 5.0
+    assert screener._open_pct(9.5, 10.0) == -5.0
+    assert screener._open_pct(None, 10.0) is None
+    assert screener._open_pct(0.0, 10.0) is None    # 停牌开盘 0 → None
+
+
 def test_match_strategies_market_floors():
     r = _row(pct=5, vol_ratio=1.5, turnover=4, amount=1e8)      # 1亿：A 股不命中
     assert "volume_surge" not in screener.match_strategies(r, screener.MARKETS["A"]["floors"])

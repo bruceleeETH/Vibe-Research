@@ -79,7 +79,8 @@ def objective_flags(r: dict) -> list[str]:
 
 # f62 主力净额 / f66 超大单净额 / f184 主力净占比% —— 随行情快照一并取（同一 clist 接口族）
 # f24 60日涨跌幅 / f25 年初至今涨跌幅 —— 趋势因子用；f13 市场码 —— 拼 secid（跨市场日K用）
-_SNAPSHOT_FIELDS = "f12,f13,f14,f2,f3,f6,f8,f9,f10,f20,f23,f24,f25,f100,f115,f62,f66,f184"
+# f17 今开 / f18 昨收 —— 开盘涨幅现算；f109 5日涨跌幅（上游不给时归 None、前端显示"—"）
+_SNAPSHOT_FIELDS = "f12,f13,f14,f2,f3,f6,f8,f9,f10,f17,f18,f20,f23,f24,f25,f100,f109,f115,f62,f66,f184"
 _FUND_FIELDS = "f12,f62,f66,f184"
 
 # 市场定义：全部走东财 clist 同一接口族，仅 fs 不同。
@@ -126,7 +127,16 @@ def _norm(d: dict) -> dict:
         "main_net": nf(d.get("f62")), "super_net": nf(d.get("f66")),
         "main_pct": nf(d.get("f184")),
         "pct_60d": nf(d.get("f24")), "pct_ytd": nf(d.get("f25")),
+        "pct_5d": nf(d.get("f109")),
+        "open_pct": _open_pct(nf(d.get("f17")), nf(d.get("f18"))),
     }
+
+
+def _open_pct(open_: float | None, prev_close: float | None) -> float | None:
+    """开盘涨幅% =（今开 / 昨收 - 1）×100。缺数据/停牌（开盘 0）→ None。"""
+    if not open_ or not prev_close:
+        return None
+    return round((open_ / prev_close - 1) * 100, 2)
 
 
 def _clist_page(host: str, pn: int, pz: int, fid: str = "f6",
