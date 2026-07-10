@@ -78,7 +78,7 @@ def test_scan_filters_st_and_sorts(scan_isolated):
         _row(code="600003", name="大成交", pct=5, vol_ratio=1.5, turnover=4, amount=8e8, industry="AI"),
         _row(code="600004", name="不命中", pct=0.5),
     ]
-    scan_isolated.setattr(screener, "market_snapshot", lambda market="A": snapshot)
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: snapshot)
     out = screener.scan(force=True)
     codes = [c["code"] for c in out["candidates"]]
     assert codes == ["600003", "600001"]          # ST 排除、不命中排除、成交额降序
@@ -91,7 +91,7 @@ def test_scan_filters_st_and_sorts(scan_isolated):
 def test_scan_fund_fallback_join(scan_isolated):
     """行情快照资金字段全空时，独立资金快照按代码补齐。"""
     snapshot = [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)]
-    scan_isolated.setattr(screener, "market_snapshot", lambda market="A": snapshot)
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: snapshot)
     scan_isolated.setattr(screener, "fund_snapshot",
                           lambda: {"600001": {"main_net": 2.5e8, "super_net": 1e8, "main_pct": 6.1}})
     c = screener.scan(force=True)["candidates"][0]
@@ -101,7 +101,7 @@ def test_scan_fund_fallback_join(scan_isolated):
 def test_scan_attaches_pool_history(scan_isolated, tmp_path):
     """候选曾入池 → pool_history 带历次真实表现（新→旧）。"""
     snapshot = [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)]
-    scan_isolated.setattr(screener, "market_snapshot", lambda market="A": snapshot)
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: snapshot)
     import json, os
     os.makedirs(tmp_path, exist_ok=True)
     entries = [
@@ -142,7 +142,7 @@ def test_scan_market_pool_params(scan_isolated):
         _row(code="300001", name="创股", pct=5, vol_ratio=1.5, turnover=4, amount=3e8),
         _row(code="600001", name="沪股", pct=5, vol_ratio=1.5, turnover=4, amount=3e8),
     ]
-    scan_isolated.setattr(screener, "market_snapshot", lambda market="A": snapshot)
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: snapshot)
     out = screener.scan(pool="cyb", force=True)                 # 创业板池 = 30 开头前缀过滤
     assert [c["code"] for c in out["candidates"]] == ["300001"]
     assert out["market"] == "A" and out["pool"] == "cyb"
@@ -182,6 +182,25 @@ def test_scan_stale_while_revalidate(scan_isolated):
     screener._CACHE[key] = (_time.time(), old)
     scan_isolated.setattr(screener, "_in_session", lambda m, ts: True)
     assert "stale" not in screener.scan()
+
+
+def test_snapshot_cache_reused_across_pools(scan_isolated):
+    """切换股票池复用同一份市场快照：网络层只拉一次。"""
+    calls = []
+
+    def fake_clist_all(fid="f6", fields="", fs=""):
+        calls.append(fs)
+        return [{"f12": "300001", "f13": 0, "f14": "创股", "f2": 10.0, "f3": 5.0,
+                 "f6": 3e8, "f8": 4.0, "f10": 1.5}]
+
+    scan_isolated.setattr(screener, "_clist_all", fake_clist_all)
+    scan_isolated.setattr(screener, "_in_session", lambda m, ts: True)
+    screener.scan(pool="all", force=True)      # force → 拉一次
+    screener.scan(pool="cyb", force=True)      # force 也重拉（语义：强制新数据）
+    n = len(calls)
+    out = screener.scan(pool="kcb")            # 非 force：复用快照缓存
+    assert len(calls) == n
+    assert [c["code"] for c in out["candidates"]] == []  # kcb 池过滤掉 30 开头
 
 
 def test_open_pct():
@@ -375,7 +394,7 @@ def test_api_pool_remove_404():
 
 def test_api_scan_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(screener, "market_snapshot",
-                        lambda market="A": [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)])
+                        lambda market="A", force=False: [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)])
     monkeypatch.setattr(screener, "fund_snapshot", lambda: {})
     monkeypatch.setattr(screener, "industry_strength", lambda: {})
     monkeypatch.setattr(rp, "POOL_FILE", str(tmp_path / "reviewpool.json"))

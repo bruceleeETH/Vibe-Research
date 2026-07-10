@@ -251,12 +251,23 @@ def _clist_all(fid: str = "f6", fields: str = _SNAPSHOT_FIELDS, fs: str = _SNAPS
     return out
 
 
-def market_snapshot(market: str = "A") -> list[dict]:
-    """指定市场全量快照（含主力资金字段，见 _norm）。market ∈ MARKETS。"""
+def market_snapshot(market: str = "A", force: bool = False) -> list[dict]:
+    """指定市场全量快照（含主力资金字段，见 _norm）。market ∈ MARKETS。
+
+    快照单独缓存（同扫描的盘中/盘后 TTL，内存不落盘）：切换股票池时复用同一份
+    快照做过滤+评分（毫秒级），不再重新全量拉取。
+    """
+    now = time.time()
+    key = f"snap:{market}"
+    hit = _CACHE.get(key)
+    if hit and not force and now - hit[0] < _ttl_for(market, hit[0], now):
+        return hit[1]
     fs = MARKETS[market]["fs"]
     rows = [_norm(d) for d in _clist_all("f6", _SNAPSHOT_FIELDS, fs)]
     for r in rows:
         r["market"] = market
+    if rows:
+        _CACHE[key] = (now, rows)
     return rows
 
 
@@ -458,14 +469,14 @@ def scan(market: str = "A", pool: str = "all", force: bool = False) -> dict:
             return hit[1]
         _bg_refresh(key, market, pool)          # 过期：旧数据立即返回，后台换新
         return dict(hit[1], stale=True)
-    return _do_scan(market, pool)
+    return _do_scan(market, pool, force=force)
 
 
-def _do_scan(market: str, pool: str) -> dict:
-    """实际扫描（同步、耗时）：全量快照 → 硬筛 → 资金/历史/评分，写缓存并落盘。"""
+def _do_scan(market: str, pool: str, force: bool = False) -> dict:
+    """实际扫描：快照（有缓存则复用）→ 硬筛 → 资金/历史/评分，写缓存并落盘。"""
     now = time.time()
     key = f"scan:{market}:{pool}"
-    rows = market_snapshot(market)
+    rows = market_snapshot(market, force=force)
     codes, pool_note = pool_codes(pool)
     floors = MARKETS[market]["floors"]
     candidates = []
