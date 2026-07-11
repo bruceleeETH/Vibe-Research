@@ -288,6 +288,16 @@ export interface SampleEntry {
   perf: PoolPerf; mfe: number | null; mae: number | null; mature: boolean;
 }
 
+// 数据存储清单（.cache 可视化）
+export interface StorageItem {
+  key: string; kind: "asset" | "cache" | "other";
+  name: string; desc: string; path: string;
+  size: number; files: number; mtime: string | null; exists: boolean;
+}
+export interface StorageInfo {
+  dir: string; total_size: number; asset_size: number; items: StorageItem[];
+}
+
 // 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
 export interface GlobalIndex {
   key: string; name: string; region: string;
@@ -357,6 +367,8 @@ export const api = {
     get<Bar[]>(`/review/kline?code=${encodeURIComponent(code)}&secid=${encodeURIComponent(secid)}&market=${market}&count=${count}`),
   reviewWeights: () => get<FactorWeights>("/review/weights"),
   reviewWeightsSet: (w: FactorWeights) => request<FactorWeights>("/review/weights", "POST", w),
+  reviewStorage: () => get<StorageInfo>("/review/storage"),
+  reviewStorageClear: () => request<{ freed: number; removed: string[] }>("/review/storage/clear", "POST"),
   reviewSampleDays: () => get<SampleDaySummary[]>("/review/samples/days"),
   reviewSampleDay: (date: string) => get<SampleEntry[]>(`/review/samples/day?date=${date}`),
   reviewSamplesCapture: () => request<{ captured: number; note: string }>("/review/samples/capture", "POST"),

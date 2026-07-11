@@ -557,6 +557,66 @@ def test_api_stats_shape(shadow, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 数据存储：清单 / 备份 / 清理
+# ---------------------------------------------------------------------------
+import io
+import zipfile
+
+import storage as st
+
+
+@pytest.fixture()
+def cache_dir(tmp_path, monkeypatch):
+    d = tmp_path / ".cache"
+    d.mkdir()
+    (d / "reviewpool.json").write_text('{"entries": []}', encoding="utf-8")
+    (d / "scancache.json").write_text('{"scan:A:all": [0, {}]}', encoding="utf-8")
+    sub = d / "samples"
+    sub.mkdir()
+    (sub / "2026-07-10.json").write_text('{"entries": []}', encoding="utf-8")
+    (d / "unknown.bin").write_bytes(b"x" * 10)
+    monkeypatch.setattr(st, "CACHE_DIR", str(d))
+    return d
+
+
+def test_storage_inventory(cache_dir):
+    inv = st.inventory()
+    by_key = {i["key"]: i for i in inv["items"]}
+    assert by_key["reviewpool.json"]["kind"] == "asset" and by_key["reviewpool.json"]["exists"]
+    assert by_key["samples"]["files"] == 1
+    assert by_key["scancache.json"]["kind"] == "cache"
+    assert by_key["unknown.bin"]["kind"] == "other"            # 未登记项如实展示
+    assert by_key["factor_weights.json"]["exists"] is False    # 登记但未创建 → 占位行
+    assert inv["total_size"] > 0 and inv["asset_size"] > 0
+    assert inv["dir"] == str(cache_dir)
+
+
+def test_storage_backup_zip(cache_dir):
+    data = st.backup_zip()
+    names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+    assert "reviewpool.json" in names
+    assert any(n.startswith("samples/") for n in names)
+    assert "scancache.json" not in names                       # 缓存类不进备份
+
+
+def test_storage_clear_caches(cache_dir):
+    r = st.clear_caches()
+    assert "扫描缓存" in r["removed"] and r["freed"] > 0
+    assert not (cache_dir / "scancache.json").exists()
+    assert (cache_dir / "reviewpool.json").exists()            # 资产不动
+    assert (cache_dir / "unknown.bin").exists()                # 未登记项不动
+
+
+def test_api_storage_shape(cache_dir):
+    r = client.get("/api/review/storage")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert {"dir", "total_size", "asset_size", "items"} <= set(d)
+    r = client.get("/api/review/storage/backup")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+
+
+# ---------------------------------------------------------------------------
 # 真实数据源 shape 冒烟（联网，pytest -m live 运行）
 # ---------------------------------------------------------------------------
 

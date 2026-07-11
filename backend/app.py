@@ -28,6 +28,7 @@ import myreports as mr
 import reviewpool as rp
 import samples
 import screener
+import storage
 
 app = FastAPI(title="Vibe-Research API", version="0.1.1")
 
@@ -678,6 +679,39 @@ def review_pool_remove(eid: str):
     if not rp.remove(eid):
         raise HTTPException(404, "记录不存在")
     return {"data": {"ok": True}}
+
+
+@app.get("/api/review/storage")
+def review_storage():
+    """数据存储清单：.cache 各项的类型（资产/缓存）、大小、路径、最后更新。"""
+    try:
+        return {"data": storage.inventory()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"存储清单异常：{e}") from e
+
+
+@app.get("/api/review/storage/backup")
+def review_storage_backup():
+    """备份全部资产（复盘池/影子样本/权重/持仓/研报）为 zip 下载。"""
+    from fastapi.responses import Response
+
+    try:
+        data = storage.backup_zip()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"备份失败：{e}") from e
+    from datetime import datetime as _dt
+    fname = f"vibe-research-backup-{_dt.now().strftime('%Y%m%d-%H%M')}.zip"
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.post("/api/review/storage/clear")
+def review_storage_clear():
+    """清理可再生缓存（扫描/资讯雷达 + 内存缓存），下次访问自动重建。"""
+    try:
+        return {"data": storage.clear_caches()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"清理失败：{e}") from e
 
 
 @app.get("/api/review/kline")
