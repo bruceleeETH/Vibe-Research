@@ -556,6 +556,28 @@ def test_api_stats_shape(shadow, monkeypatch):
     assert {"by_strategy", "by_score", "shadow", "manual", "days", "shadow_total", "note"} <= set(d)
 
 
+def test_diagnose(scan_isolated):
+    snapshot = [
+        _row(code="600001", name="差一点", pct=2.1, vol_ratio=1.8, turnover=4, amount=3e8),
+        _row(code="600002", name="全命中", pct=5, vol_ratio=2.5, turnover=6, amount=5e8, pe_ttm=30),
+    ]
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: snapshot)
+    d = screener.diagnose("600001")
+    vs = next(s for s in d["strategies"] if s["key"] == "volume_surge")
+    assert not vs["hit"]
+    by_label = {x["label"]: x for x in vs["conds"]}
+    assert not by_label["涨幅 3%~9%"]["ok"] and by_label["涨幅 3%~9%"]["actual"] == "2.1%"
+    assert by_label["量比 >1.3"]["ok"]
+    # 名称包含匹配 + 已命中提示
+    d2 = screener.diagnose("全命中")
+    assert d2["stock"]["code"] == "600002"
+    assert any(s["hit"] for s in d2["strategies"]) and d2["notes"]
+    # 找不到 → None；API → 404
+    assert screener.diagnose("999999") is None
+    r = client.get("/api/review/diagnose?q=999999")
+    assert r.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # 数据存储：清单 / 备份 / 清理
 # ---------------------------------------------------------------------------

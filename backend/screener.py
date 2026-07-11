@@ -116,6 +116,60 @@ def match_strategies(r: dict, floors: tuple[float, float] = (2e8, 3e8)) -> list[
     return hits
 
 
+def diagnose(query: str, market: str = "A") -> dict | None:
+    """「为何未入选」诊断：按代码（精确）或名称（包含）在全市场快照中找到该股，
+    逐条件对照三个策略的门槛，返回 ✓/✗ 与实际值/要求值。找不到返回 None。
+
+    快照走缓存（market_snapshot），诊断本身零额外网络请求。
+    """
+    if market not in MARKETS:
+        market = "A"
+    rows = market_snapshot(market)
+    q = query.strip()
+    r = next((x for x in rows if x["code"].lower() == q.lower()), None) or \
+        next((x for x in rows if q in x["name"]), None)
+    if r is None:
+        return None
+
+    f0, f1 = MARKETS[market]["floors"]
+
+    def c(label, ok, actual, need):
+        return {"label": label, "ok": bool(ok), "actual": actual, "need": need}
+
+    pct_, vr, to, amt, pe = r.get("pct"), r.get("vol_ratio"), r.get("turnover"), r.get("amount"), r.get("pe_ttm")
+
+    def fmt_yi(v):
+        return f"{v / 1e8:.1f}亿" if v is not None else "—"
+
+    strategies = [
+        {"key": "volume_surge", "name": "放量上涨", "conds": [
+            c("涨幅 3%~9%", pct_ is not None and 3 <= pct_ <= 9, f"{pct_}%" if pct_ is not None else "—", "3%~9%"),
+            c("量比 >1.3", vr is not None and vr > 1.3, vr if vr is not None else "—", ">1.3"),
+            c("换手 >3%", to is not None and to > 3, f"{to}%" if to is not None else "—", ">3%"),
+            c(f"成交额 >{fmt_yi(f0)}", amt is not None and amt > f0, fmt_yi(amt), f">{fmt_yi(f0)}"),
+        ]},
+        {"key": "high_turnover", "name": "高换手", "conds": [
+            c("量比 ≥2", vr is not None and vr >= 2, vr if vr is not None else "—", "≥2"),
+            c("换手 ≥5%", to is not None and to >= 5, f"{to}%" if to is not None else "—", "≥5%"),
+            c(f"成交额 ≥{fmt_yi(f1)}", amt is not None and amt >= f1, fmt_yi(amt), f"≥{fmt_yi(f1)}"),
+        ]},
+        {"key": "value_breakout", "name": "估值突破", "conds": [
+            c("涨幅 1%~6%", pct_ is not None and 1 <= pct_ <= 6, f"{pct_}%" if pct_ is not None else "—", "1%~6%"),
+            c("0<PE≤50", pe is not None and 0 < pe <= 50, pe if pe is not None else "—", "0<PE≤50"),
+            c("换手 >2%", to is not None and to > 2, f"{to}%" if to is not None else "—", ">2%"),
+        ]},
+    ]
+    for s in strategies:
+        s["hit"] = all(x["ok"] for x in s["conds"])
+
+    notes = []
+    if market == "A" and ("ST" in r["name"].upper() or "退" in r["name"]):
+        notes.append("ST/退市整理标的：扫描时被客观排除")
+    if any(s["hit"] for s in strategies):
+        notes.append("已命中策略——未出现在列表可能是：股票池不含该股 / 候选过载流动性门槛裁掉 / 前端过滤条件（提示项、最低分等）")
+    return {"stock": r, "strategies": strategies, "flags": objective_flags(r), "notes": notes}
+
+
 def objective_flags(r: dict) -> list[str]:
     """客观事实标注（机械阈值判定，非评分非评级）。"""
     flags = []

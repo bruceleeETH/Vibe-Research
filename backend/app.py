@@ -714,6 +714,20 @@ def review_storage_clear():
         raise HTTPException(502, f"清理失败：{e}") from e
 
 
+@app.get("/api/review/diagnose")
+def review_diagnose(q: str = Query(..., min_length=1, max_length=20), market: str = Query("A")):
+    """「为何未入选」诊断：按代码/名称在全市场快照中查该股，逐条对照策略门槛。"""
+    if market not in screener.MARKETS:
+        raise HTTPException(400, f"market 只能是 {list(screener.MARKETS)} 之一")
+    try:
+        d = screener.diagnose(q.strip(), market)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"诊断异常：{e}") from e
+    if d is None:
+        raise HTTPException(404, f"全市场快照中没有找到「{q}」（检查代码/名称，或该股停牌/未上市）")
+    return {"data": d}
+
+
 @app.get("/api/review/kline")
 def review_kline(code: str = Query(...), secid: str = Query(""), market: str = Query("A"),
                  count: int = Query(60, ge=10, le=250)):

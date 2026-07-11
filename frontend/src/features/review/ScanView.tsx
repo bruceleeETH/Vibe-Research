@@ -3,7 +3,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, ArrowUpDown, ArrowUp, ArrowDown, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { api, type ScanResult, type ScanCandidate, type FactorWeights } from "@/lib/api";
+import { api, type ScanResult, type ScanCandidate, type FactorWeights, type DiagnoseResult } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   color, pct, yi, fmtNet, factorText, scoreColor, candLine,
@@ -37,7 +37,20 @@ export function ScanView({ onDetail, inPoolToday, onAddToPool, onAiCtx }: Props)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [weights, setWeights] = useState<FactorWeights | null>(null);
   const [weightsOpen, setWeightsOpen] = useState(false);
+  const [diag, setDiag] = useState<DiagnoseResult | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // 搜索词/市场变化时清掉上次诊断
+  useEffect(() => { setDiag(null); }, [search, market]);
+
+  const runDiagnose = () => {
+    setDiagLoading(true);
+    api.reviewDiagnose(search.trim(), market)
+      .then(setDiag)
+      .catch((e) => toast.error(e.message))
+      .finally(() => setDiagLoading(false));
+  };
 
   // 当前市场/池的引用：stale 自动重取时校验，避免切换市场后被旧请求覆盖
   const currentKey = useRef("A:all");
@@ -260,10 +273,78 @@ export function ScanView({ onDetail, inPoolToday, onAddToPool, onAiCtx }: Props)
     </tr>
   );
 
+  // 空结果：搜索词存在时提供「为何未入选」诊断
   const empty = (
-    <p className="py-10 text-center text-sm text-muted-foreground/60">
-      当前条件下没有候选（非交易时段量比/换手可能失真，可切换过滤条件或稍后重扫）。
-    </p>
+    <div className="py-8 text-center">
+      <p className="text-sm text-muted-foreground/60">
+        {search.trim()
+          ? `没有匹配「${search.trim()}」的候选——可能未命中任何策略，或被过滤条件滤掉。`
+          : "当前条件下没有候选（非交易时段量比/换手可能失真，可切换过滤条件或稍后重扫）。"}
+      </p>
+      {search.trim() && !diag && (
+        <button
+          onClick={runDiagnose}
+          disabled={diagLoading}
+          className="mt-3 rounded-lg bg-primary/10 px-3 py-1.5 text-sm text-primary hover:bg-primary/20"
+        >
+          {diagLoading ? "查询中…" : `诊断「${search.trim()}」为何未入选`}
+        </button>
+      )}
+      {diag && (
+        <div className="mx-auto mt-4 max-w-2xl rounded-lg border border-border/40 p-4 text-left text-sm">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <span className="font-semibold">{diag.stock.name}</span>
+              <span className="ml-1.5 font-mono text-xs text-muted-foreground">{diag.stock.code}</span>
+              <span className="ml-2 text-xs text-muted-foreground">{diag.stock.industry || "—"}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 font-mono text-xs text-muted-foreground">
+              <span>价 {diag.stock.price ?? "—"}</span>
+              <span className={color(diag.stock.pct)}>{pct(diag.stock.pct)}</span>
+              <span>成交 {yi(diag.stock.amount)}</span>
+              <span>换手 {diag.stock.turnover ?? "—"}%</span>
+              <span>量比 {diag.stock.vol_ratio ?? "—"}</span>
+              <span>PE {diag.stock.pe_ttm ?? "—"}</span>
+              <span onClick={(e) => e.stopPropagation()}>
+                <PoolBtn c={diag.stock as ScanCandidate} inPool={inPoolToday(diag.stock.code)} onAdd={onAddToPool} />
+              </span>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {diag.strategies.map((s) => (
+              <div key={s.key} className={cn("rounded-lg border p-2.5", s.hit ? "border-success/40" : "border-border/40")}>
+                <p className={cn("mb-1.5 text-xs font-semibold", s.hit ? "text-success" : "text-muted-foreground")}>
+                  {s.name} {s.hit ? "✓ 命中" : "未命中"}
+                </p>
+                <div className="space-y-1 text-xs">
+                  {s.conds.map((cd) => (
+                    <div key={cd.label} className="flex items-center justify-between gap-2">
+                      <span className={cd.ok ? "text-muted-foreground" : "text-danger"}>
+                        {cd.ok ? "✓" : "✗"} {cd.label}
+                      </span>
+                      <span className={cn("font-mono", cd.ok ? "text-muted-foreground/70" : "text-danger")}>{cd.actual}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          {diag.flags.length > 0 && (
+            <p className="mt-2 text-xs">
+              {diag.flags.map((f) => (
+                <span key={f} className="mr-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-500">{f}</span>
+              ))}
+            </p>
+          )}
+          {diag.notes.map((n) => (
+            <p key={n} className="mt-2 text-[11px] text-sky-500">{n}</p>
+          ))}
+          <p className="mt-2 text-[11px] text-muted-foreground/60">
+            数据为快照时点（{scan?.generated_at}）；未命中也可点「入池」手动跟踪。
+          </p>
+        </div>
+      )}
+    </div>
   );
 
   return (

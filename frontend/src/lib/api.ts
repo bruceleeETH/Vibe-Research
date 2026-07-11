@@ -288,6 +288,16 @@ export interface SampleEntry {
   perf: PoolPerf; mfe: number | null; mae: number | null; mature: boolean;
 }
 
+// 「为何未入选」诊断
+export interface DiagnoseCond { label: string; ok: boolean; actual: string | number; need: string }
+export interface DiagnoseStrategy { key: string; name: string; hit: boolean; conds: DiagnoseCond[] }
+export interface DiagnoseResult {
+  stock: Partial<ScanCandidate> & { code: string; name: string };
+  strategies: DiagnoseStrategy[];
+  flags: string[];
+  notes: string[];
+}
+
 // 数据存储清单（.cache 可视化）
 export interface StorageItem {
   key: string; kind: "asset" | "cache" | "other";
@@ -367,6 +377,8 @@ export const api = {
     get<Bar[]>(`/review/kline?code=${encodeURIComponent(code)}&secid=${encodeURIComponent(secid)}&market=${market}&count=${count}`),
   reviewWeights: () => get<FactorWeights>("/review/weights"),
   reviewWeightsSet: (w: FactorWeights) => request<FactorWeights>("/review/weights", "POST", w),
+  reviewDiagnose: (q: string, market = "A") =>
+    get<DiagnoseResult>(`/review/diagnose?q=${encodeURIComponent(q)}&market=${market}`),
   reviewStorage: () => get<StorageInfo>("/review/storage"),
   reviewStorageClear: () => request<{ freed: number; removed: string[] }>("/review/storage/clear", "POST"),
   reviewSampleDays: () => get<SampleDaySummary[]>("/review/samples/days"),
