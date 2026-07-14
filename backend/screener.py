@@ -170,6 +170,49 @@ def diagnose(query: str, market: str = "A") -> dict | None:
     return {"stock": r, "strategies": strategies, "flags": objective_flags(r), "notes": notes}
 
 
+def candidate_detail(code: str, market: str = "A") -> dict | None:
+    """单票候选口径详情（复盘池点击详情用）：与扫描候选同形状。
+
+    先在已有扫描缓存里找（带综合分/因子/连续命中）；不在今日候选中则从
+    全市场快照构造同形状数据（score/factors 记 None，前端显示不适用）。
+    快照走缓存，常态零额外网络请求。找不到（停牌/退市）返回 None。
+    """
+    if market not in MARKETS:
+        market = "A"
+    q = code.strip().lower()
+
+    def _fresh_history(c: dict) -> dict:
+        try:
+            import reviewpool
+            return dict(c, pool_history=reviewpool.history_by_code({c["code"]}).get(c["code"], []))
+        except Exception:
+            return dict(c, pool_history=c.get("pool_history", []))
+
+    for key, hit in list(_CACHE.items()):
+        if key.startswith(f"scan:{market}:"):
+            c = next((x for x in hit[1].get("candidates", []) if x["code"].lower() == q), None)
+            if c:
+                return _fresh_history(c)
+    r = next((x for x in market_snapshot(market) if x["code"].lower() == q), None)
+    if r is None and market == "A":
+        # 手动入池的 6 位 ETF 代码按 A 股记市场，但 A 股快照不含 ETF → 补查 ETF 快照
+        r = next((x for x in market_snapshot("ETF") if x["code"].lower() == q), None)
+        if r is not None:
+            market = "ETF"
+    if r is None:
+        return None
+    c = dict(r)
+    for k in ("main_net", "super_net", "main_pct"):
+        c.setdefault(k, None)
+    c["strategies"] = match_strategies(r, MARKETS[market]["floors"])
+    c["flags"] = objective_flags(r)
+    c["score"] = None
+    c["factors"] = None
+    c["hit_streak"] = 0
+    c["first_hit"] = False
+    return _fresh_history(c)
+
+
 def objective_flags(r: dict) -> list[str]:
     """客观事实标注（机械阈值判定，非评分非评级）。"""
     flags = []

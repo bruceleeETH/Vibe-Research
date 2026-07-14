@@ -229,8 +229,9 @@ export interface ScanCandidate {
   pct_5d: number | null; open_pct: number | null;
   strategies: string[]; flags: string[];
   pool_history: PoolHistoryItem[];
-  score: number;
-  factors: { trend: number; volume: number; fund: number; valuation: number; industry: number };
+  // score/factors 仅当票在今日候选中才有（复盘池点击详情的非候选票为 null）
+  score: number | null;
+  factors: { trend: number; volume: number; fund: number; valuation: number; industry: number } | null;
   hit_streak: number;    // 连续命中天数（含今天，基于存档回看）
   first_hit: boolean;    // 近 5 个存档日内首次命中
 }
@@ -372,6 +373,8 @@ export const api = {
   reviewPoolTag: (id: string, tag: string, note: string) =>
     request<{ ok: boolean }>("/review/pool/tag", "POST", { id, tag, note }),
   reviewPoolRemove: (id: string) => request<{ ok: boolean }>(`/review/pool/${id}`, "DELETE"),
+  reviewCandidate: (code: string, market = "A") =>
+    get<ScanCandidate>(`/review/candidate?code=${encodeURIComponent(code)}&market=${market}`),
   reviewStats: () => get<ReviewStats>("/review/stats"),
   reviewKline: (code: string, secid = "", market = "A", count = 60) =>
     get<Bar[]>(`/review/kline?code=${encodeURIComponent(code)}&secid=${encodeURIComponent(secid)}&market=${market}&count=${count}`),

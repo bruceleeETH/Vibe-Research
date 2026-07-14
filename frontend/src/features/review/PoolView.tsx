@@ -5,15 +5,16 @@ import { toast } from "sonner";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, type PoolData, type PoolEntry } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { color, pct, STRATEGY_NAME, TAG_STYLE } from "./shared";
+import { color, pct, rowCls, STRATEGY_NAME, TAG_STYLE } from "./shared";
 
 interface Props {
   pool: PoolData | null;
   loading: boolean;
   onReload: (refresh?: boolean) => void;
+  onDetail: (e: PoolEntry) => void;
 }
 
-export function PoolView({ pool, loading, onReload }: Props) {
+export function PoolView({ pool, loading, onReload, onDetail }: Props) {
   const [manualInput, setManualInput] = useState("");
 
   const addManual = async () => {
@@ -131,7 +132,7 @@ export function PoolView({ pool, loading, onReload }: Props) {
               </thead>
               <tbody>
                 {pool.entries.map((e) => (
-                  <tr key={e.id} className="border-b border-border/30">
+                  <tr key={e.id} className={rowCls} onClick={() => onDetail(e)} title="点击查看详情">
                     <td className="px-2 py-2.5">
                       <span className="font-medium">{e.name}</span>
                       <span className="ml-1.5 font-mono text-xs text-muted-foreground">{e.code}</span>
@@ -169,7 +170,7 @@ export function PoolView({ pool, loading, onReload }: Props) {
                         {(pool.tags || []).map((t) => (
                           <button
                             key={t}
-                            onClick={() => setTagFor(e, t)}
+                            onClick={(ev) => { ev.stopPropagation(); setTagFor(e, t); }}
                             className={cn(
                               "rounded px-1.5 py-0.5 text-[11px] transition-colors",
                               e.tag === t ? TAG_STYLE[t] : "bg-muted/30 text-muted-foreground/50 hover:text-muted-foreground",
@@ -184,7 +185,7 @@ export function PoolView({ pool, loading, onReload }: Props) {
                     </td>
                     <td className="px-2 py-2.5">
                       <button
-                        onClick={() => removeEntry(e)}
+                        onClick={(ev) => { ev.stopPropagation(); removeEntry(e); }}
                         className="text-muted-foreground/50 hover:text-destructive"
                         title="移出复盘池"
                       >

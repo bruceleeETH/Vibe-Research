@@ -121,6 +121,44 @@ def test_scan_attaches_pool_history(scan_isolated, tmp_path):
     assert c["pool_history"][1]["mature"] and c["pool_history"][1]["perf"]["d10"] == 4.0
 
 
+def test_candidate_detail_from_scan_cache(scan_isolated):
+    """票在今日候选中 → 直接复用扫描缓存里带综合分/因子的那份。"""
+    snapshot = [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)]
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: snapshot)
+    screener.scan(force=True)                      # 填扫描缓存
+    c = screener.candidate_detail("600001")
+    assert c is not None and c["score"] is not None and c["factors"] is not None
+    assert "volume_surge" in c["strategies"]
+
+
+def test_candidate_detail_non_candidate(scan_isolated):
+    """票不在候选中（未命中策略）→ 从快照构造同形状数据，score/factors 为 None。"""
+    snapshot = [_row(code="600004", name="不命中", pct=0.5, secid="1.600004")]
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: snapshot)
+    c = screener.candidate_detail("600004")
+    assert c is not None
+    assert c["score"] is None and c["factors"] is None
+    assert c["strategies"] == [] and c["pool_history"] == []
+    assert isinstance(c["flags"], list)
+    assert c["hit_streak"] == 0 and c["first_hit"] is False
+
+
+def test_candidate_detail_not_found(scan_isolated):
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: [])
+    assert screener.candidate_detail("999999") is None
+
+
+def test_api_review_candidate(scan_isolated):
+    """API 契约：正常返回 data、非法代码 400、找不到 404。"""
+    snapshot = [_row(code="600001", name="甲", pct=5, vol_ratio=1.5, turnover=4, amount=3e8)]
+    scan_isolated.setattr(screener, "market_snapshot", lambda market="A", force=False: snapshot)
+    r = client.get("/api/review/candidate?code=600001")
+    assert r.status_code == 200 and r.json()["data"]["code"] == "600001"
+    assert client.get("/api/review/candidate?code=;;bad;;").status_code == 400
+    assert client.get("/api/review/candidate?code=600001&market=XX").status_code == 400
+    assert client.get("/api/review/candidate?code=999999").status_code == 404
+
+
 def test_snapshot_paging_fallback(monkeypatch):
     """单次大页被服务端钳制/断连时，自动按成交额降序分页补齐 + 跨页去重。"""
     total = 250

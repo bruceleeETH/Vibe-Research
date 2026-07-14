@@ -51,24 +51,30 @@ export function DetailDrawer({ detail, onClose, inPoolToday, onAddToPool }: Prop
         </div>
       </div>
 
-      {/* 综合分 + 因子拆解条形图 */}
-      <div className="rounded-lg border border-border/40 p-3">
-        <div className="mb-2 flex items-baseline gap-2">
-          <span className={cn("font-mono text-3xl font-bold", scoreColor(detail.score ?? 0))}>{detail.score ?? "—"}</span>
-          <span className="text-xs text-muted-foreground">综合分 · 权重 趋势25 量能25 资金20 估值15 行业15</span>
-        </div>
-        <div className="space-y-1.5">
-          {(["trend", "volume", "fund", "valuation", "industry"] as const).map((k) => (
-            <div key={k} className="flex items-center gap-2">
-              <span className="w-8 shrink-0 text-xs text-muted-foreground">{FACTOR_NAME[k]}</span>
-              <div className="h-2 flex-1 overflow-hidden rounded bg-muted/40">
-                <div className="h-full rounded bg-primary/70" style={{ width: `${detail.factors?.[k] ?? 0}%` }} />
+      {/* 综合分 + 因子拆解条形图（仅今日候选有分；复盘池里的非候选票不适用） */}
+      {detail.factors ? (
+        <div className="rounded-lg border border-border/40 p-3">
+          <div className="mb-2 flex items-baseline gap-2">
+            <span className={cn("font-mono text-3xl font-bold", scoreColor(detail.score ?? 0))}>{detail.score ?? "—"}</span>
+            <span className="text-xs text-muted-foreground">综合分 · 权重 趋势25 量能25 资金20 估值15 行业15</span>
+          </div>
+          <div className="space-y-1.5">
+            {(["trend", "volume", "fund", "valuation", "industry"] as const).map((k) => (
+              <div key={k} className="flex items-center gap-2">
+                <span className="w-8 shrink-0 text-xs text-muted-foreground">{FACTOR_NAME[k]}</span>
+                <div className="h-2 flex-1 overflow-hidden rounded bg-muted/40">
+                  <div className="h-full rounded bg-primary/70" style={{ width: `${detail.factors?.[k] ?? 0}%` }} />
+                </div>
+                <span className="w-8 shrink-0 text-right font-mono text-xs text-muted-foreground">{detail.factors?.[k] ?? "—"}</span>
               </div>
-              <span className="w-8 shrink-0 text-right font-mono text-xs text-muted-foreground">{detail.factors?.[k] ?? "—"}</span>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      ) : (
+        <p className="rounded-lg border border-border/40 p-3 text-xs text-muted-foreground/70">
+          该票当前不在今日候选中，综合分 / 因子拆解不适用（分数在候选集内做百分位归一，仅对入选者比较有意义）。
+        </p>
+      )}
 
       {/* 迷你日K（近 60 交易日） */}
       <div className="rounded-lg border border-border/40 p-3">

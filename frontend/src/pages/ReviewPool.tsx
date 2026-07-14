@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Disclaimer } from "@/components/ui/Disclaimer";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { api, type PoolData, type ScanCandidate } from "@/lib/api";
+import { api, type PoolData, type PoolEntry, type ScanCandidate } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { pct, type AiCtx } from "@/features/review/shared";
 import { ScanView } from "@/features/review/ScanView";
@@ -49,6 +49,24 @@ export function ReviewPool() {
       if (r.added) loadPool();
     } catch (e) {
       toast.error((e as Error).message);
+    }
+  };
+
+  // 复盘池行点击 → 拉候选口径详情开右侧详情栏；快照没有该票（停牌等）时用池内字段兜底
+  const openEntryDetail = async (e: PoolEntry) => {
+    try {
+      setDetail(await api.reviewCandidate(e.code, e.market || "A"));
+    } catch {
+      setDetail({
+        code: e.code, name: e.name, secid: "", market: e.market || "A",
+        price: e.price, pct: e.change_pct, amount: null, turnover: null, vol_ratio: null,
+        pe_ttm: null, pe_dyn: null, pb: null, mcap: null, industry: "",
+        main_net: null, super_net: null, main_pct: null,
+        pct_60d: null, pct_ytd: null, pct_5d: null, open_pct: null,
+        strategies: e.strategies, flags: [],
+        pool_history: [{ entry_date: e.entry_date, entry_price: e.entry_price, perf: e.perf, mature: e.mature, tag: e.tag }],
+        score: null, factors: null, hit_streak: 0, first_hit: false,
+      });
     }
   };
 
@@ -103,7 +121,7 @@ export function ReviewPool() {
         <ScanView onDetail={setDetail} inPoolToday={inPoolToday} onAddToPool={addToPool} onAiCtx={setCtx("scan")} />
       </div>
       <div className={tab === "pool" ? "" : "hidden"}>
-        <PoolView pool={pool} loading={poolLoading} onReload={loadPool} />
+        <PoolView pool={pool} loading={poolLoading} onReload={loadPool} onDetail={openEntryDetail} />
       </div>
       <div className={tab === "stats" ? "" : "hidden"}>
         <StatsView onAiCtx={setCtx("stats")} />

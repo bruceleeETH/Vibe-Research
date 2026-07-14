@@ -728,6 +728,23 @@ def review_diagnose(q: str = Query(..., min_length=1, max_length=20), market: st
     return {"data": d}
 
 
+@app.get("/api/review/candidate")
+def review_candidate(code: str = Query(..., min_length=1, max_length=10), market: str = Query("A")):
+    """复盘池点击详情：按代码返回与扫描候选同形状的单票详情（缓存快照，常态零额外请求）。"""
+    code = code.strip()
+    if not _POOL_CODE_RE.match(code):
+        raise HTTPException(400, f"代码格式不合法：{code}")
+    if market not in screener.MARKETS:
+        raise HTTPException(400, f"market 只能是 {list(screener.MARKETS)} 之一")
+    try:
+        d = screener.candidate_detail(code, market)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"详情获取异常：{e}") from e
+    if d is None:
+        raise HTTPException(404, f"全市场快照中没有找到「{code}」（可能停牌/退市）")
+    return {"data": d}
+
+
 @app.get("/api/review/kline")
 def review_kline(code: str = Query(...), secid: str = Query(""), market: str = Query("A"),
                  count: int = Query(60, ge=10, le=250)):
