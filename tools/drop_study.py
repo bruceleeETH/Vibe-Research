@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "backend"))
 import astock  # noqa: E402
 
 
-def fetch_bars(secid: str, count: int) -> list[dict]:
+def fetch_bars_em(secid: str, count: int) -> list[dict]:
     """东财通用日K（含成交量/成交额，比 astock.em_daily_kline 多两个字段）。"""
     params = {
         "secid": secid, "klt": "101", "fqt": "1", "lmt": str(count),
@@ -41,6 +41,31 @@ def fetch_bars(secid: str, count: int) -> list[dict]:
                         "high": float(p[3]), "low": float(p[4]),
                         "volume": float(p[5]), "amount": float(p[6])})
     return out
+
+
+def fetch_bars_tencent(secid: str, count: int) -> list[dict]:
+    """腾讯日K兜底（东财连不上时用）。字段无成交额，amount 记 None。"""
+    import requests
+
+    mkt, code = secid.split(".")
+    symbol = ("sh" if mkt == "1" else "sz") + code
+    r = requests.get("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+                     params={"param": f"{symbol},day,,,{count},qfq"},
+                     headers={"User-Agent": astock.UA}, timeout=20)
+    days = (((r.json().get("data") or {}).get(symbol) or {}).get("qfqday")
+            or ((r.json().get("data") or {}).get(symbol) or {}).get("day") or [])
+    return [{"date": p[0], "open": float(p[1]), "close": float(p[2]),
+             "high": float(p[3]), "low": float(p[4]),
+             "volume": float(p[5]), "amount": None}
+            for p in days if len(p) >= 6]
+
+
+def fetch_bars(secid: str, count: int) -> list[dict]:
+    try:
+        return fetch_bars_em(secid, count)
+    except Exception as e:
+        print(f"[东财不可用，改用腾讯源] {type(e).__name__}", file=sys.stderr)
+        return fetch_bars_tencent(secid, count)
 
 
 def study(secid: str, target_date: str, count: int) -> dict:
