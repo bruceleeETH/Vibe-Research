@@ -25,7 +25,7 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 def get_prefix(code: str) -> str:
     """6 位代码 → 交易所前缀。"""
-    if code.startswith(("6", "9")):
+    if code.startswith(("6", "9", "5")):   # 5 开头 = 沪市基金/ETF（510/512/513/515/588…）
         return "sh"
     if code.startswith("8"):
         return "bj"
