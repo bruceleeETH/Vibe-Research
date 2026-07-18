@@ -38,3 +38,6 @@ frontend/tsconfig.tsbuildinfo
 
 # 本地参考资料（不进仓库）
 newinfo710/
+
+# 分析产物目录（本地数据，不进仓库）
+data/
