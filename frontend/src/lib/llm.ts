@@ -1,5 +1,7 @@
 // 用户 LLM 配置（只存本地 localStorage，不上传、不进仓库）+ 系统 AI 对话调用。
 
+import { storageSet, storageRemove } from "@/lib/storage";
+
 import { ApiError, authHeaders } from "./api";
 import { isCliProvider, type ProviderId } from "./ai-models";
 
@@ -37,11 +39,11 @@ export function loadLlm(): LlmConfig | null {
 }
 
 export function saveLlm(cfg: LlmConfig) {
-  localStorage.setItem(KEY, JSON.stringify(cfg));
+  storageSet(KEY, JSON.stringify(cfg));
 }
 
 export function clearLlm() {
-  localStorage.removeItem(KEY);
+  storageRemove(KEY);
 }
 
 export function hasLlm(): boolean {

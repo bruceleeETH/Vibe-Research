@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, X, RefreshCw, Star } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { api, type Quote } from "@/lib/api";
 import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
+import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
 import { cn } from "@/lib/utils";
 
 // A 股红涨绿跌（与整个看板一致）。
@@ -13,19 +13,41 @@ const color = (v: number | undefined) =>
   v == null ? "text-muted-foreground" : v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground";
 const pct = (v: number | undefined) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`);
 
+const LIVE_KEY = "vr-watchlist-live";
+
+// localStorage 在隐私模式 / 嵌入式浏览器里可能直接抛异常。读写都要兜底，
+// 否则初始化时一抛整个自选股页就白屏（与 lib/watchlist.ts 的处理保持一致）。
+const loadLive = (): boolean => {
+  try {
+    return localStorage.getItem(LIVE_KEY) === "on";
+  } catch {
+    return false;
+  }
+};
+const saveLive = (on: boolean) => {
+  try {
+    localStorage.setItem(LIVE_KEY, on ? "on" : "off");
+  } catch {
+    /* 存储不可用：开关本次会话内仍生效，只是不被记住 */
+  }
+};
+
 export function Watchlist() {
   const [codes, setCodes] = useState<string[]>(loadWatch);
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
+  // 实时行情默认**关闭**——开着会持续请求，让用户自己决定要不要开。
+  const [live, setLive] = useState(loadLive);
 
-  const refresh = (cs: string[]) => {
-    if (!cs.length) { setQuotes({}); return; }
-    setLoading(true);
-    api.quote(cs.join(",")).then(setQuotes).catch(() => {}).finally(() => setLoading(false));
+  const { quotes, loading, updatedAt, polling, error, refresh } = useLiveQuotes(codes, live);
+
+  const toggleLive = () => {
+    setLive((on) => {
+      const next = !on;
+      saveLive(next);
+      return next;
+    });
   };
-  useEffect(() => { refresh(loadWatch()); }, []);
 
   const add = () => {
     const { next, added } = addCodes(codes, input);
@@ -35,11 +57,10 @@ export function Watchlist() {
       return;
     }
     setCodes(next); saveWatch(next); setInput(""); setHint(`已添加 ${added} 只`);
-    refresh(next);
   };
   const remove = (c: string) => {
     const next = codes.filter((x) => x !== c);
-    setCodes(next); saveWatch(next); refresh(next);
+    setCodes(next); saveWatch(next);
   };
 
   const aiContext = useMemo(
@@ -64,13 +85,38 @@ export function Watchlist() {
         title="自选股"
         subtitle="批量添加、一屏总览你关注的标的。数据只存本地、不上传。"
         actions={
-          codes.length > 0 && (
-            <AskAiButton
-              context={aiContext}
-              label="让 AI 读自选"
-              suggestions={["这几只里哪些估值偏高", "帮我按赛道分组看看", "各自最大的风险点是什么"]}
-            />
-          )
+          <div className="flex items-center gap-2">
+            <button
+              onClick={toggleLive}
+              title={live ? "关闭实时行情" : "开启实时行情（交易时段每 3 秒自动刷新）"}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                live
+                  ? "border-primary/50 bg-primary/10 text-primary"
+                  : "border-border/60 text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <span className="relative flex h-2 w-2">
+                {polling && (
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/70" />
+                )}
+                <span
+                  className={cn(
+                    "relative inline-flex h-2 w-2 rounded-full",
+                    live ? "bg-primary" : "bg-muted-foreground/40",
+                  )}
+                />
+              </span>
+              实时行情
+            </button>
+            {codes.length > 0 && (
+              <AskAiButton
+                context={aiContext}
+                label="让 AI 读自选"
+                suggestions={["这几只里哪些估值偏高", "帮我按赛道分组看看", "各自最大的风险点是什么"]}
+              />
+            )}
+          </div>
         }
       />
 
@@ -105,14 +151,32 @@ export function Watchlist() {
             <Star className="h-4 w-4 text-primary" /> 自选总览
             <span className="text-xs font-normal text-muted-foreground">（{codes.length}）</span>
           </h3>
-          <button
-            onClick={() => refresh(codes)}
-            disabled={loading}
-            className="text-muted-foreground hover:text-primary"
-            title="刷新价格"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-          </button>
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground/70">
+            {error ? (
+              <span className="text-warning">{error}</span>
+            ) : (
+              <>
+                {/* 把「开着却没在刷」的原因说清楚，否则用户会以为坏了 */}
+                {live && !polling && codes.length > 0 && (
+                  <span>{isTradingHours() ? "已暂停（页面未激活）" : "非交易时段 · 已暂停"}</span>
+                )}
+                {polling && <span className="text-primary/80">实时 · 每 3 秒</span>}
+                {updatedAt && (
+                  <span className="font-mono">
+                    {new Date(updatedAt).toLocaleTimeString("zh-CN", { hour12: false })}
+                  </span>
+                )}
+              </>
+            )}
+            <button
+              onClick={refresh}
+              disabled={loading}
+              className="text-muted-foreground hover:text-primary"
+              title="立即刷新"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+            </button>
+          </div>
         </div>
         {codes.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground/60">

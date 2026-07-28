@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils";
 const REFRESH_MS = 30 * 60 * 1000; // 每半小时自动刷新
 const pnlColor = (v: number) => (v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground");
 const fmt = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+// 单价类（现价/成本/清仓价）最多 4 位小数：ETF/基金常见 3-4 位，截断成 2 位会与市值/盈亏对不上账
+const fmtPx = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 4 });
 
 export function Portfolio() {
   const [data, setData] = useState<PortfolioData | null>(null);
@@ -193,9 +195,9 @@ export function Portfolio() {
                       <span className="font-medium">{h.name}</span>
                       <span className="ml-1.5 font-mono text-xs text-muted-foreground/60">{h.code}</span>
                     </td>
-                    <td className="px-2 py-2.5 font-mono">{fmt(h.price)}</td>
+                    <td className="px-2 py-2.5 font-mono">{fmtPx(h.price)}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(h.shares)}</td>
-                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(h.cost)}</td>
+                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(h.cost)}</td>
                     <td className="px-2 py-2.5 font-mono">{fmt(h.market_value)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl > 0 ? "+" : ""}{fmt(h.pnl)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl_pct > 0 ? "+" : ""}{h.pnl_pct}%</td>
@@ -278,9 +280,9 @@ export function Portfolio() {
                       <span className="ml-1.5 font-mono text-xs text-muted-foreground/60">{c.code}</span>
                     </td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{c.date}</td>
-                    <td className="px-2 py-2.5 font-mono">{fmt(c.price)}</td>
+                    <td className="px-2 py-2.5 font-mono">{fmtPx(c.price)}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(c.shares)}</td>
-                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(c.cost)}</td>
+                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(c.cost)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{c.pnl > 0 ? "+" : ""}{fmt(c.pnl)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{c.pnl_pct > 0 ? "+" : ""}{c.pnl_pct}%</td>
                     <td className="px-2 py-2.5">

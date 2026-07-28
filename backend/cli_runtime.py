@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 # 提示词投递方式（各 CLI 接口不同）：
@@ -47,6 +48,8 @@ _CLI_DEFS: dict[str, dict] = {
 
 _EXTRA_PATH_DIRS = [
     "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin",
+    # Codex 桌面版把 CLI 装在 app bundle 里，不进 PATH（issue #16 / PR #11）
+    "/Applications/Codex.app/Contents/Resources",
     str(Path.home() / ".local/bin"), str(Path.home() / ".npm-global/bin"),
     str(Path.home() / ".bun/bin"), str(Path.home() / ".deno/bin"),
     str(Path.home() / ".yarn/bin"),
@@ -121,6 +124,10 @@ def run_cli(kind: str, system_prompt: str, user_prompt: str) -> str:
                 input=stdin_payload,
                 capture_output=True,
                 text=True,
+                # 中文 Windows 的 locale 编码是 GBK，而这些 CLI 输出 UTF-8；
+                # 不显式指定就会 UnicodeDecodeError（issue #2）
+                encoding="utf-8",
+                errors="replace",
                 cwd=tmpdir,
                 env=env,
                 timeout=_CLI_TIMEOUT_S,
@@ -129,9 +136,11 @@ def run_cli(kind: str, system_prompt: str, user_prompt: str) -> str:
             raise RuntimeError(f"{kind} 生成超时（>{_CLI_TIMEOUT_S}s）") from e
 
         out = (proc.stdout or "").strip()
-        if proc.returncode != 0 and not out:
-            err = (proc.stderr or "").strip()[:300]
-            raise RuntimeError(f"{kind} 退出码 {proc.returncode}{'：' + err if err else ''}")
+        # 退出码非 0 一律报错：即使已经吐了半截 stdout，那也是失败的运行，
+        # 把残缺输出当成完整答案返回会变成静默失败（旧逻辑的 `and not out`）。
+        if proc.returncode != 0:
+            err = (proc.stderr or "").strip()[-500:] or "（子进程未输出错误信息）"
+            raise RuntimeError(f"{kind} 退出码 {proc.returncode}：{err}")
         return out
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -167,8 +176,22 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
 
         proc = subprocess.Popen(
             [bin_path, *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, cwd=tmpdir, env=env, text=True, bufsize=1,
+            # stderr 不能丢：CLI 的失败原因只在这里，丢了用户就只看到光秃秃的
+            # 「退出码 1」（issue #16）。但必须持续排空，否则管道写满会死锁。
+            stderr=subprocess.PIPE, cwd=tmpdir, env=env, text=True, bufsize=1,
+            encoding="utf-8", errors="replace",
         )
+        err_tail: deque = deque(maxlen=40)   # 只留尾部若干行，避免长进度日志占内存
+
+        def _drain_err(stderr=proc.stderr):
+            try:
+                for ln in stderr:
+                    err_tail.append(ln)
+            except Exception:
+                pass
+
+        err_thread = threading.Thread(target=_drain_err, daemon=True)
+        err_thread.start()
         if stdin_payload is not None:
             try:
                 proc.stdin.write(stdin_payload)
@@ -209,7 +232,12 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(f"{kind} 输出已结束但进程未退出") from e
         if rc != 0:
-            raise RuntimeError(f"{kind} 退出码 {rc}")
+            # 必须等排空线程收完再读 err_tail：CLI 常常是「写完错误立刻退出」，
+            # proc.wait() 可能先于排空线程读完管道返回，此时 err_tail 还是空的，
+            # 报错信息又会退化成「退出码 1」——正是本次要修的症状。
+            err_thread.join(timeout=5)
+            err = "".join(err_tail).strip()[-500:] or "（子进程未输出错误信息）"
+            raise RuntimeError(f"{kind} 退出码 {rc}：{err}")
     finally:
         if proc and proc.poll() is None:
             proc.kill()

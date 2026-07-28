@@ -213,7 +213,7 @@ export interface DragonTiger {
   seats: { buy: DtSeat[]; sell: DtSeat[] };
   institution: { buy_amt: number; sell_amt: number; net_amt: number };
 }
-export interface LockupRow { date: string; type: string; shares: number; ratio: number }
+export interface LockupRow { date: string; type: string; shares: number; able_shares: number; ratio: number }
 export interface Lockup { history: LockupRow[]; upcoming: LockupRow[] }
 export interface Board { name: string; code: string; change_pct: number | string; lead_stock: string }
 export interface Blocks { total: number; boards: Board[]; concept_tags: string[] }

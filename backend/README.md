@@ -31,10 +31,21 @@ python3 -m venv .venv
 | `GET /api/announcements?code=600519` | 近期公告（东财） | requests |
 | `GET /api/news?code=600519` | 个股新闻 | akshare |
 | `GET /api/kline?code=600519` | K线 | mootdx |
+| — | *（AI 工具层走腾讯 K 线，mootdx 仅作备份：mootdx 是 TCP 7709，部分网络连不通要等十几秒超时）* | — |
 | `GET /api/finance?code=600519` | 季报财务快照（mootdx，前端未用 / 备用） | mootdx |
 | **资金面·筹码·信号（v3.3）** | `/api/margin` · `/block-trade` · `/holders` · `/dividend` · `/fund-flow` · `/dragon-tiger` · `/lockup` · `/blocks` · `/hot-concepts` · `/investor-qa` · `/industry` | requests |
 | `GET /api/market/overview` · `/api/radar` | 市场情绪+板块资金 · 资讯雷达 | akshare / stdlib |
 | `POST /api/chat` | 系统 AI 对话（function calling，AI 自己调数据工具） | requests |
+| `POST /api/debate` | **多空辩论**（多 agent，流式 NDJSON）：事实底稿 → 多方 / 空方 →（可选反驳）→ 中立主持 | requests |
+| `POST /api/reflect` | **反思审计**（流式 NDJSON）：对一段已写好的分析做推理审计 | requests |
+
+`/api/debate` 请求体：`{"code": "600519", "rounds": 1, "llm": {...}}`（`rounds=2` 加一轮交叉反驳）。
+事件类型：`status` · `dossier_progress`（底稿逐项进度）· `dossier` · `stage`（角色开始）·
+`delta`（增量文本）· `stage_done`（角色完成，失败时带 `failed: true`）· `done` · `error`。
+
+`/api/reflect` 请求体：`{"source": "待审的分析文本", "title": "可选标题", "llm": {...}}`。
+
+> 两个端点都**不产出买卖结论**：辩论终点是「分歧点 + 验证清单」，反思终点是「怎么继续验证」。
 
 > 上表为主要端点；完整路由清单见 `app.py`。要更全量的 A 股数据（打板 / ETF期权 / 全市场行业排名等），用根目录 [`a-stock-data/`](../a-stock-data/SKILL.md) 工具箱。
 

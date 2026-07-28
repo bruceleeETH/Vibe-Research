@@ -20,6 +20,12 @@ import requests
 import astock
 import cli_runtime
 import gstock
+import tools
+
+# 工具定义与执行统一由 tools.py 提供（chat / mcp_server / debate 共用一套）。
+# 这两个别名是历史入口，mcp_server 与既有测试仍按 chat.TOOLS / chat._exec_tool 取用。
+TOOLS = tools.TOOLS
+_exec_tool = tools.exec_tool
 
 MAX_ROUNDS = 6  # 工具调用最大轮数，防死循环
 _TOOL_RESULT_CAP = 6000  # 单次工具结果注入上限（控 token）
@@ -43,9 +49,18 @@ ANALYSIS_FRAMEWORK = """【投研分析框架】当用户要你分析个股、�
 （简单的事实性问题——如"现价多少"——直接答，不必套用整个框架。）"""
 
 # 用 f-string 先把框架焊进去，只留 {{context}} 给运行时 .format() 填——4 处调用点无需改。
-SYSTEM_PROMPT = f"""你是 Vibe-Research 里的投研助理。你可以调用工具获取客观数据来支撑回答：
-A 股用 query_quote / query_valuation / query_reports / query_news（传 6 位代码）；
-美股 / 港股 / 韩股用 query_global_stock（美股用字母代码如 AAPL / NVDA，港股用数字如 00700，韩股用 6 位数字加 .KS 如三星 005930.KS）。
+SYSTEM_PROMPT = f"""你是 Vibe-Research 里的投研助理。你可以调用工具获取客观数据来支撑回答，A 股工具一律传 6 位代码：
+
+- 行情估值：query_quote（批量行情）/ query_valuation（前向 PE、PEG）/ query_valuation_percentile（估值历史分位）/ query_kline（K 线与区间涨跌）
+- 基本面：query_financials（营收净利 ROE 毛利率）/ query_company_info / query_reports（研报）/ query_news
+- 资金筹码：query_fund_flow（主力净流入）/ query_margin（两融）/ query_holders（股东户数）/ query_block_trade / query_dragon_tiger / query_dividend
+- 事件风险：query_announcements（公告）/ query_lockup（解禁）/ query_investor_qa（互动易）
+- 行业板块：query_concepts（板块归属与热门概念）/ query_industry_comparison（行业强弱）/ query_industry_reports
+- 市场层：query_market（scope=indices/global/emotion/turnover/overview）/ query_news_radar（赛道资讯）
+- 海外：query_global_stock（美股 AAPL / 港股 00700 / 韩股 005930.KS）
+
+用工具的方式：**先想清楚要回答什么，再挑最相关的 2-5 个工具**，不要一次把所有工具都调一遍。
+估值贵贱看 query_valuation_percentile，资金动向看 query_fund_flow，风险排查看 query_announcements + query_lockup。
 
 硬性规则（务必遵守）：
 - 只做信息整理、数据解读与多视角分析；不推荐任何具体买卖、不预测涨跌与价位、不给买卖时机、不承诺收益、不打分排名。
@@ -57,94 +72,6 @@ A 股用 query_quote / query_valuation / query_reports / query_news（传 6 位�
 
 当前页面上下文：
 {{context}}"""
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "query_quote",
-            "description": "查 A 股实时行情：现价/涨跌/PE/PB/市值/换手/涨跌停。可批量。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "codes": {"type": "array", "items": {"type": "string"}, "description": "6 位股票代码列表，如 ['600519','000858']"},
-                },
-                "required": ["codes"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_valuation",
-            "description": "查单只个股的完整估值：行情 + 机构一致预期 EPS + 前向PE/PEG/PE消化年数。",
-            "parameters": {
-                "type": "object",
-                "properties": {"code": {"type": "string", "description": "6 位股票代码"}},
-                "required": ["code"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_reports",
-            "description": "查个股近期研报列表（标题/机构/评级/日期）。",
-            "parameters": {
-                "type": "object",
-                "properties": {"code": {"type": "string", "description": "6 位股票代码"}},
-                "required": ["code"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_news",
-            "description": "查个股近期新闻（标题/时间/来源）。",
-            "parameters": {
-                "type": "object",
-                "properties": {"code": {"type": "string", "description": "6 位股票代码"}},
-                "required": ["code"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_global_stock",
-            "description": "查美股 / 港股 / 韩股个股：行情（现价/涨跌/市值/成交额）+ 关键财务指标（韩股仅行情、无财务）。美股用字母代码(如 AAPL/NVDA)，港股用数字(如 00700)，韩股用 6 位数字加 .KS 后缀(如三星 005930.KS、SK海力士 000660.KS)。",
-            "parameters": {
-                "type": "object",
-                "properties": {"symbol": {"type": "string", "description": "美股字母代码 / 港股代码 / 韩股 XXXXXX.KS"}},
-                "required": ["symbol"],
-            },
-        },
-    },
-]
-
-
-def _exec_tool(name: str, args: dict):
-    """执行工具，返回可序列化结果（失败返回 error 字段，不抛）。"""
-    try:
-        if name == "query_quote":
-            return astock.tencent_quote([str(c) for c in args.get("codes", [])])
-        if name == "query_valuation":
-            return astock.full_valuation(str(args["code"]))
-        if name == "query_reports":
-            rows = astock.eastmoney_reports(str(args["code"]), max_pages=1)[:15]
-            return [{k: r.get(k) for k in ("title", "publishDate", "orgSName", "emRatingName")} for r in rows]
-        if name == "query_news":
-            rows = astock.stock_news(str(args["code"]), limit=15)
-            return [{k: r.get(k) for k in ("新闻标题", "发布时间", "文章来源")} for r in rows]
-        if name == "query_global_stock":
-            data = gstock.us_hk_stock(str(args.get("symbol", "")))
-            return data or {"error": "未找到该美股/港股/韩股代码"}
-        return {"error": f"未知工具 {name}"}
-    except astock.DependencyMissing as e:
-        return {"error": str(e)}
-    except Exception as e:  # noqa: BLE001 — 工具错误回喂给模型，不中断循环
-        return {"error": f"{name} 执行失败：{e}"}
 
 
 # —— 防 SSRF：用户可自带 OpenAI 兼容端点，但后端替其发请求前要挡住指向云元数据/内网的地址 ——

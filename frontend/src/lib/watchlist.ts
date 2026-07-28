@@ -13,7 +13,13 @@ export function loadWatch(): string[] {
 }
 
 export function saveWatch(codes: string[]) {
-  localStorage.setItem(KEY, JSON.stringify(codes));
+  // localStorage 在隐私模式 / 嵌入式浏览器 / 配额写满时会抛异常。
+  // 存不下就算了——自选丢失总好过整页崩掉（读取侧同样是 try/catch 兜底）。
+  try {
+    localStorage.setItem(KEY, JSON.stringify(codes));
+  } catch {
+    /* 存储不可用：本次会话内仍可正常使用，只是关掉页面后不保留 */
+  }
 }
 
 // 从任意文本里抽取 6 位 A 股代码（逗号 / 空格 / 换行 / 顿号分隔都行，方便一次粘贴一串）。

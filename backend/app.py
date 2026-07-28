@@ -20,17 +20,19 @@ from pydantic import BaseModel
 import astock
 import chat as chat_layer
 import cli_runtime
+import debate as debate_layer
 import gstock
 import newsradar
 import portfolio as pf
 import market
 import myreports as mr
+import reflection as reflect_layer
 import reviewpool as rp
 import samples
 import screener
 import storage
 
-app = FastAPI(title="Vibe-Research API", version="0.1.1")
+app = FastAPI(title="Vibe-Research API", version="0.2.2")
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
@@ -76,7 +78,7 @@ def _validate(code: str) -> str:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "vibe-research-api", "version": "0.1.1"}
+    return {"ok": True, "service": "vibe-research-api", "version": "0.2.2"}
 
 
 class LLMConfig(BaseModel):
@@ -124,6 +126,67 @@ def chat(req: ChatReq):
             yield json.dumps({"type": "error", "message": f"对话失败：{e}"}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+def _check_llm(llm: LLMConfig) -> dict:
+    """校验模型配置并返回 cfg（chat / debate / reflect 三个流式端点共用）。
+
+    配置问题走 HTTP 400（前端能弹提示引导去「接入 AI」页），运行时错误留给流内 error 事件。
+    """
+    if not llm.model:
+        raise HTTPException(400, "缺少模型配置，请先在「接入 AI」里选择")
+    if llm.provider.startswith("cli-"):
+        kind = llm.provider[4:]
+        if not cli_runtime.detect_cli(kind):
+            raise HTTPException(400, f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。")
+    elif not llm.apiKey or not llm.baseURL:
+        raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
+    return llm.model_dump()
+
+
+def _ndjson(events):
+    """把事件生成器包成 NDJSON 流；运行时异常转成流内 error 事件，不中断连接。"""
+    def gen():
+        try:
+            for ev in events():
+                yield json.dumps(ev, ensure_ascii=False) + "\n"
+        except Exception as e:  # noqa: BLE001
+            yield json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+class DebateReq(BaseModel):
+    code: str
+    rounds: int = 1
+    llm: LLMConfig
+
+
+@app.post("/api/debate")
+def debate(req: DebateReq):
+    """多空辩论：后端先拉客观事实底稿，再让多方 / 空方 / 中立主持依次发言，**流式** NDJSON。
+
+    刻意不产出买卖结论——终点是「分歧点 + 验证清单」，判断留给用户自己。
+    """
+    code = _validate(req.code)
+    cfg = _check_llm(req.llm)
+    rounds = 2 if req.rounds >= 2 else 1
+    return _ndjson(lambda: debate_layer.run_debate_stream(cfg, code, rounds))
+
+
+class ReflectReq(BaseModel):
+    source: str
+    title: str = ""
+    llm: LLMConfig
+
+
+@app.post("/api/reflect")
+def reflect(req: ReflectReq):
+    """反思：对一段已写好的分析做推理审计（哪些有数据支撑、最脆弱一环、验证清单），流式 NDJSON。"""
+    if not (req.source or "").strip():
+        raise HTTPException(400, "source 不能为空")
+    cfg = _check_llm(req.llm)
+    return _ndjson(lambda: reflect_layer.run_reflection_stream(cfg, req.source, req.title))
 
 
 class HoldingIn(BaseModel):

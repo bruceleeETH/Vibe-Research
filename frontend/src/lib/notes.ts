@@ -1,6 +1,8 @@
 // 研究记录（沉淀）—— 把 AI 复盘 / 今日要点 / 问 AI 的结果存本地，形成个人投研记录。
 // 只存本地 localStorage，不上传、不进仓库。对应投研框架第 7 层「沉淀」。
 
+import { storageSet, storageRemove } from "@/lib/storage";
+
 export interface Note {
   id: string;
   kind: string;   // 复盘 / 今日要点 / 问AI
@@ -22,7 +24,7 @@ export function loadNotes(): Note[] {
 }
 
 function persist(notes: Note[]) {
-  localStorage.setItem(KEY, JSON.stringify(notes.slice(0, MAX)));
+  storageSet(KEY, JSON.stringify(notes.slice(0, MAX)));
 }
 
 // 新记录置顶。返回更新后的完整列表。
@@ -46,5 +48,5 @@ export function deleteNote(id: string): Note[] {
 }
 
 export function clearNotes() {
-  localStorage.removeItem(KEY);
+  storageRemove(KEY);
 }

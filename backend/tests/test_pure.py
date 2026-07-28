@@ -10,6 +10,9 @@ def test_get_prefix():
     assert astock.get_prefix("000001") == "sz"
     assert astock.get_prefix("300750") == "sz"
     assert astock.get_prefix("832000") == "bj"   # 8 开头北交所
+    assert astock.get_prefix("510300") == "sh"   # 沪 ETF（issue #10：曾误判 sz → 行情为 0）
+    assert astock.get_prefix("588000") == "sh"   # 科创 50 ETF
+    assert astock.get_prefix("159915") == "sz"   # 深 ETF 15 开头走默认 sz
 
 
 def test_calc_peg():

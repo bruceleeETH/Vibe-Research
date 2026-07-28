@@ -72,6 +72,51 @@ def test_portfolio_corrupt_file_returns_empty(tmp_pf):
     assert r.json()["data"]["holdings"] == []
 
 
+# ── issue #13：加仓合并成本保留 4 位小数（ETF/基金成本常见 3-4 位） ──
+
+def test_portfolio_merge_cost_keeps_4_decimals(tmp_pf):
+    client.post("/api/portfolio/holding", json={"code": "510300", "shares": 100, "cost": 1.0001})
+    client.post("/api/portfolio/holding", json={"code": "510300", "shares": 100, "cost": 1.0003})
+    h = client.get("/api/portfolio").json()["data"]["holdings"][0]
+    assert h["cost"] == pytest.approx(1.0002, abs=1e-9)
+
+
+# ── issue #12：旧版数据在仓库内 .cache/，重下载会丢 → 自动迁到用户目录 ──
+
+def test_portfolio_legacy_migration(tmp_path, monkeypatch):
+    old = tmp_path / "repo-cache" / "portfolio.json"
+    old.parent.mkdir()
+    old.write_text('{"holdings": [{"code": "600519", "shares": 100, "cost": 8.0}]}', encoding="utf-8")
+    monkeypatch.setattr(pf, "_OLD_PF_FILE", str(old))
+    monkeypatch.setattr(pf, "CACHE_DIR", str(tmp_path / "userdata"))
+    monkeypatch.setattr(pf, "PF_FILE", str(tmp_path / "userdata" / "portfolio.json"))
+    pf._migrate_legacy()
+    assert pf._load()["holdings"][0]["code"] == "600519"
+    # 新位置已有数据 → 再跑迁移不覆盖
+    pf._save({"holdings": []})
+    pf._migrate_legacy()
+    assert pf._load()["holdings"] == []
+
+
+def test_myreports_legacy_migration(tmp_path, monkeypatch):
+    import myreports as mr
+
+    old = tmp_path / "repo-cache" / "myreports"
+    old.mkdir(parents=True)
+    (old / "index.json").write_text("[]", encoding="utf-8")
+    monkeypatch.delenv("VR_REPORTS_DIR", raising=False)
+    monkeypatch.setattr(mr, "_OLD_DEFAULT_DIR", old)
+    monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "userdata" / "myreports")
+    # 上次复制中断留下的半截临时目录，不该挡住这次迁移
+    stale = tmp_path / "userdata" / "myreports.migrate.tmp"
+    stale.mkdir(parents=True)
+    (stale / "partial.bin").write_text("x", encoding="utf-8")
+    mr._migrate_legacy()
+    dst = tmp_path / "userdata" / "myreports"
+    assert (dst / "index.json").exists()
+    assert not (dst / "partial.bin").exists()  # 半截内容没混进正式目录
+
+
 # ── full_valuation：一致预期缺「均值」/ '-' 占位不再 502 ─────────────
 
 _QUOTE = {"600519": {"name": "贵州茅台", "price": 100.0, "mcap_yi": 1000, "pe_ttm": 20.0, "pb": 5.0}}
