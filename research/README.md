@@ -5,6 +5,23 @@ AI 复盘产出的研究报告归档处。报告基于公开行情数据，随�
 - 原始日K数据：`data/drop_study_*.json`（本地生成，gitignored，随时可用 `tools/drop_study.py` 重建）。
 - `交易台账.md`：个人持仓与决策记录，**只存本地、不进仓库**（.gitignore 已排除）；实时盈亏看 App「持仓」页。
 
+## 外部工具：突发热点（TrendRadar）
+
+全网热榜 / 财经关键词突发监控 **不在本仓**，与本仓库 **兄弟目录** 独立维护：
+
+```text
+../TrendRadar/                 # git clone 的 fork（bruceleeETH/TrendRadar）
+../TrendRadar/LOCAL_SETUP.md   # remote、财经词库、密钥、与 Vibe 分工
+```
+
+| | TrendRadar | 本仓资讯雷达 |
+|--|------------|--------------|
+| 主责 | 热榜突然变热、关键词命中推送 | 12 赛道公开 RSS、持仓侧数据 |
+| 源码 | 独立仓库，勿 vendor 进本仓 | `backend/newsradar.py` |
+| 推送 | 飞书等（见其 Secrets） | 应用内 |
+
+两边可共用同一飞书机器人，**不要**把 TrendRadar 源码合并进本 monorepo（GPL + 发布节奏不同）。
+
 ## 索引
 
 | 日期 | 报告 | 主题 |
