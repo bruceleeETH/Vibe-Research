@@ -75,7 +75,15 @@ async function request<T>(path: string, method: "GET" | "POST" | "DELETE" = "GET
     if (resp.status === 401) {
       throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
     }
-    throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
+    // Vite 代理在后端挂掉时返回 text/plain 的 500/502，无 JSON detail —— 别只显示「HTTP 500」。
+    const detail = typeof payload?.detail === "string" ? payload.detail : null;
+    if (!detail && (resp.status === 500 || resp.status === 502 || resp.status === 503 || resp.status === 504)) {
+      throw new ApiError(
+        `后端无响应（HTTP ${resp.status}）。请确认已启动 backend：cd backend && .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900`,
+        resp.status,
+      );
+    }
+    throw new ApiError(detail || `HTTP ${resp.status}`, resp.status);
   }
   return (payload?.data ?? payload) as T;
 }
@@ -173,6 +181,8 @@ export interface Industry {
 export interface RadarData {
   generated_at: string | null; recent_days: number; industries: Industry[];
   stats: { industries: number; total_sources: number; failed_sources?: number };
+  stale?: boolean;
+  refresh_error?: string;
 }
 
 export interface Holding {

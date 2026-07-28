@@ -102,6 +102,12 @@ function InvestmentNewsPanel() {
           <AlertCircle className="h-4 w-4 shrink-0" /> {err}
         </div>
       )}
+      {data?.stale && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-400">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          本次刷新失败，已继续显示上次成功缓存{data.refresh_error ? `：${data.refresh_error}` : ""}
+        </div>
+      )}
 
       {!hasData && !err ? (
         <div className="rounded-lg border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground/70">

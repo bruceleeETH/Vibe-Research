@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
+import threading
 import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +28,7 @@ CACHE_FILE = os.path.join(CACHE_DIR, "radar.json")
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 BEIJING = timezone(timedelta(hours=8))
+_FETCH_LOCK = threading.Lock()
 
 
 def _strip_html(s: str) -> str:
@@ -100,47 +103,56 @@ def _fetch_source(src: dict, per: int, cutoff, redline: list[str]):
 
 def fetch_radar() -> dict:
     """抓全部源，返回 12 赛道数据并落盘缓存。"""
-    cfg = json.load(open(SOURCES_FILE, encoding="utf-8"))
-    days = cfg.get("fetch", {}).get("recent_days", 7)
-    per = cfg.get("fetch", {}).get("per_source", 6)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    redline = [k.lower() for k in cfg.get("redline_keywords", [])]
+    # A refresh is expensive and writes one shared cache. Serialising refreshes avoids
+    # two requests racing on the same cache replacement and exhausting RSS connections.
+    with _FETCH_LOCK:
+        cfg = json.load(open(SOURCES_FILE, encoding="utf-8"))
+        days = cfg.get("fetch", {}).get("recent_days", 7)
+        per = cfg.get("fetch", {}).get("per_source", 6)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        redline = [k.lower() for k in cfg.get("redline_keywords", [])]
 
-    byhint: dict[str, list] = {}
-    for s in cfg["sources"]:
-        byhint.setdefault(s["hint"], []).append(s)
+        byhint: dict[str, list] = {}
+        for s in cfg["sources"]:
+            byhint.setdefault(s["hint"], []).append(s)
 
-    industries, tasks = [], []
-    for i, ind in enumerate(cfg["industries"]):
-        pool = byhint.get(ind["key"], [])
-        industries.append({"key": ind["key"], "name": ind["name"], "accent": ind["accent"], "total": len(pool), "items": []})
-        for s in pool:
-            tasks.append((i, s))
+        industries, tasks = [], []
+        for i, ind in enumerate(cfg["industries"]):
+            pool = byhint.get(ind["key"], [])
+            industries.append({"key": ind["key"], "name": ind["name"], "accent": ind["accent"], "total": len(pool), "items": []})
+            for s in pool:
+                tasks.append((i, s))
 
-    with ThreadPoolExecutor(max_workers=40) as ex:
-        results = list(ex.map(lambda t: (t[0], _fetch_source(t[1], per, cutoff, redline)), tasks))
+        with ThreadPoolExecutor(max_workers=40) as ex:
+            results = list(ex.map(lambda t: (t[0], _fetch_source(t[1], per, cutoff, redline)), tasks))
 
-    failed = 0
-    for idx, items in results:
-        if items is None:
-            failed += 1
-            continue
-        industries[idx]["items"].extend(items)
-    for ind in industries:
-        ind["items"].sort(key=lambda x: x.get("ts", 0), reverse=True)
+        failed = 0
+        for idx, items in results:
+            if items is None:
+                failed += 1
+                continue
+            industries[idx]["items"].extend(items)
+        for ind in industries:
+            ind["items"].sort(key=lambda x: x.get("ts", 0), reverse=True)
 
-    data = {
-        "generated_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
-        "recent_days": days,
-        "industries": industries,
-        "stats": {"industries": len(cfg["industries"]), "total_sources": len(cfg["sources"]), "failed_sources": failed},
-    }
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    tmp = CACHE_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-    os.replace(tmp, CACHE_FILE)  # 原子改名，防两次并发刷新交错写坏缓存
-    return data
+        data = {
+            "generated_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+            "recent_days": days,
+            "industries": industries,
+            "stats": {"industries": len(cfg["industries"]), "total_sources": len(cfg["sources"]), "failed_sources": failed},
+        }
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix="radar-", suffix=".tmp", dir=CACHE_DIR)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp, CACHE_FILE)
+        finally:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+        return data
 
 
 def load_cache():

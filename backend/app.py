@@ -251,6 +251,13 @@ def radar_refresh():
     try:
         return {"data": newsradar.fetch_radar()}
     except Exception as e:  # noqa: BLE001
+        cached = newsradar.load_cache()
+        if cached:
+            # RSS/网络或缓存落盘临时失败时继续提供上次成功数据，避免整个页面 500。
+            cached = dict(cached)
+            cached["stale"] = True
+            cached["refresh_error"] = str(e)
+            return {"data": cached}
         raise HTTPException(502, f"资讯雷达刷新失败：{e}") from e
 
 
