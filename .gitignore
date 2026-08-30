@@ -29,6 +29,9 @@ dist/
 build/
 frontend/tsconfig.tsbuildinfo
 
+# ── 本地运行态（start.sh 写入的 pid / 启动时间）──────────────────
+.run/
+
 # ── 编辑器 / 系统 / 工具 ──────────────────────────────────────────
 **/.claude/
 .DS_Store

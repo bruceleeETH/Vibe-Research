@@ -25,7 +25,14 @@ The `a-stock-data/` and `global-stock-data/` directories are **vendored frozen s
 
 ```bash
 # One-shot: creates venv + npm install on first run, launches both, opens the browser
+# Ctrl+C stops both; start also clears stale listeners on :8900/:5899 first
 ./start.sh
+
+# Is it still running? (closing a terminal tab ≠ guaranteed stop — check ports)
+./status.sh
+
+# Force-kill whatever holds :5899 / :8900 (orphans from agents, reload children, etc.)
+./stop.sh
 
 # Manual backend (:8900)
 cd backend && python3 -m venv .venv

@@ -130,13 +130,20 @@ Vibe-Research/
 ## 快速开始
 
 ```bash
-# 后端（:8900）
-cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
+# 一键启动（推荐）：后端 :8900 + 前端 :5899，Ctrl+C 同时退出
+./start.sh
+# 或 macOS 双击 start.command
 
-# 前端（:5899）
-cd frontend && npm install && npm run dev
-# 浏览器打开 http://localhost:5899
+# 是否还在跑？（关终端 ≠ 一定停干净，以端口为准）
+./status.sh
+
+# 强制关闭占用 5899 / 8900 的进程
+./stop.sh
+# 或双击 stop.command
+
+# 手动分别启动
+# 后端: cd backend && .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
+# 前端: cd frontend && npm run dev
 ```
 
 ## 接入 AI
