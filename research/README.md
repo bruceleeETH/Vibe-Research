@@ -5,6 +5,34 @@ AI 复盘产出的研究报告归档处。报告基于公开行情数据，随�
 - 原始日K数据：`data/drop_study_*.json`（本地生成，gitignored，随时可用 `tools/drop_study.py` 重建）。
 - `交易台账.md`：个人持仓与决策记录，**只存本地、不进仓库**（.gitignore 已排除）；实时盈亏看 App「持仓」页。
 
+## 每日复盘工作流
+
+交易日的盘前、竞价、午盘和盘后复盘使用同一套本地工作流。仓库保存规则与工具；当前持仓代码、清仓排除项和每日归档默认保存在 `~/.vibe-research/daily-review/`，不进入 Git，也不要求填写数量和成本。
+
+```bash
+# 创建当日四阶段档案（重复运行不会覆盖已有结论）
+backend/.venv/bin/python tools/daily_review.py prepare --date 2026-08-05
+
+# 输出某一阶段的固定提示词
+backend/.venv/bin/python tools/daily_review.py prompt --date 2026-08-05 --phase premarket
+
+# 查看四阶段完成状态
+backend/.venv/bin/python tools/daily_review.py status --date 2026-08-05
+
+# 一次记录买入：同步App持仓、复盘基线、当日快照和私有交易台账
+./trade buy 603228 \
+  --name 景旺电子 --qty 1000 --price 76.46 \
+  --id 20260805-603228-buy-0956
+
+# 只预览，不写入
+./trade buy 603228 \
+  --name 景旺电子 --qty 1000 --price 76.46 --dry-run
+```
+
+阶段键：`premarket`（盘前）、`auction`（竞价）、`midday`（午盘）、`close`（盘后）。人工模板见 [`templates/每日复盘模板.md`](templates/每日复盘模板.md)，设计与隐私边界见 [`docs/plans/2026-08-05-daily-review-workflow-design.md`](../docs/plans/2026-08-05-daily-review-workflow-design.md)。行情和资讯失败时必须将来源标记为 `partial`、`stale` 或 `failed`，不得沿用旧缓存冒充当日数据。
+
+`trade buy`全程只读写本地文件，不调用行情接口。建议为每笔成交传入唯一`--id`；相同ID重复执行不会重复记账。所有目标先写临时文件再替换，中途失败会回滚。
+
 ## 外部工具：突发热点（TrendRadar）
 
 全网热榜 / 财经关键词突发监控 **不在本仓**，与本仓库 **兄弟目录** 独立维护：
