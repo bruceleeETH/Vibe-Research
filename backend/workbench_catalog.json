@@ -1,0 +1,43 @@
+{
+  "strategies": ["产业趋势", "事件驱动", "情绪资金"],
+  "returns": ["业绩增长", "估值提升", "事件催化", "情绪溢价", "困境反转", "周期反转", "自定义"],
+  "logic": [
+    {"id":"demand","label":"需求扩张","strategies":["产业趋势"]},
+    {"id":"orders","label":"订单转化为收入","strategies":["产业趋势"]},
+    {"id":"product","label":"新产品放量","strategies":["产业趋势"]},
+    {"id":"margin","label":"利润率改善","strategies":["产业趋势"]},
+    {"id":"policy","label":"政策变化带来催化","strategies":["事件驱动"]},
+    {"id":"contract","label":"重大订单事件","strategies":["事件驱动"]},
+    {"id":"earnings","label":"财报变化带来预期差","strategies":["事件驱动"]},
+    {"id":"launch","label":"新品发布催化","strategies":["事件驱动"]},
+    {"id":"breadth","label":"板块强度扩散","strategies":["情绪资金"]},
+    {"id":"strength","label":"强势趋势延续","strategies":["情绪资金"]},
+    {"id":"repair","label":"分歧后修复","strategies":["情绪资金"]}
+  ],
+  "risks": [
+    {"id":"delay","label":"订单兑现延迟","strategies":["产业趋势","事件驱动"]},
+    {"id":"customer","label":"客户验证失败","strategies":["产业趋势"]},
+    {"id":"profit","label":"利润率恶化","strategies":["产业趋势"]},
+    {"id":"denied","label":"消息被官方否认","strategies":["事件驱动"]},
+    {"id":"cancelled","label":"事件取消或延期","strategies":["事件驱动"]},
+    {"id":"priced","label":"利好已被充分预期","strategies":["产业趋势","事件驱动"]},
+    {"id":"leader","label":"龙头走弱","strategies":["情绪资金"]},
+    {"id":"sector","label":"板块转弱","strategies":["情绪资金"]},
+    {"id":"failed","label":"分歧修复失败","strategies":["情绪资金"]}
+  ],
+  "entry": [
+    {"id":"price_above","label":"价格突破指定价位","kind":"price","parameter":"突破价格（元）","format":"价格突破 {value} 元","strategies":["产业趋势","事件驱动","情绪资金"]},
+    {"id":"ma_above","label":"收盘站上均线","kind":"integer","parameter":"均线周期（交易日）","format":"收盘站上 {value} 日均线","strategies":["产业趋势","情绪资金"]},
+    {"id":"evidence","label":"关键事项核实后评估","kind":"text","parameter":"需要核实的具体事项","format":"核实以下事项后评估：{value}","strategies":["产业趋势","事件驱动"]},
+    {"id":"recovery","label":"板块修复后评估","kind":"text","parameter":"板块与修复判据","format":"板块修复条件：{value}","strategies":["情绪资金"]},
+    {"id":"custom_entry","label":"自定义入场条件","kind":"text","parameter":"具体入场条件","format":"{value}","strategies":["产业趋势","事件驱动","情绪资金"]}
+  ],
+  "exit": [
+    {"id":"price_below","label":"价格跌破指定价位","kind":"price","parameter":"跌破价格（元）","format":"价格跌破 {value} 元时复查","strategies":["产业趋势","事件驱动","情绪资金"]},
+    {"id":"ma_below","label":"收盘跌破均线","kind":"integer","parameter":"均线周期（交易日）","format":"收盘跌破 {value} 日均线时复查","strategies":["产业趋势","情绪资金"]},
+    {"id":"deadline","label":"事项到期仍未兑现","kind":"deadline","parameter":"截止日期","format":"截至 {value}，{detail} 仍未兑现时复查","strategies":["产业趋势","事件驱动"]},
+    {"id":"invalidated","label":"关键假设被证伪","kind":"text","parameter":"具体证伪情形","format":"出现以下情形时复查：{value}","strategies":["产业趋势","事件驱动"]},
+    {"id":"weakness","label":"市场结构走弱","kind":"text","parameter":"龙头/板块及走弱判据","format":"结构走弱时复查：{value}","strategies":["情绪资金"]},
+    {"id":"custom_exit","label":"自定义退出复查条件","kind":"text","parameter":"具体退出复查条件","format":"{value}","strategies":["产业趋势","事件驱动","情绪资金"]}
+  ]
+}

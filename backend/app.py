@@ -25,19 +25,27 @@ import gstock
 import newsradar
 import portfolio as pf
 import market
+import limitup
 import myreports as mr
 import reflection as reflect_layer
 import reviewpool as rp
 import samples
 import screener
 import storage
+from workbench import router as workbench_router
+from workbench_journal import router as workbench_journal_router
 
 app = FastAPI(title="Vibe-Research API", version="0.2.2")
+app.include_router(limitup.router)
+app.include_router(workbench_router)
+app.include_router(workbench_journal_router)
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
 # 影子样本：交易日收盘后自动存档候选 + 每日更新未成熟样本
 samples.start_scheduler()
+# 全量来源涨停池：本地服务运行时，盘后保存当日研究样本。
+limitup.start_scheduler()
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）

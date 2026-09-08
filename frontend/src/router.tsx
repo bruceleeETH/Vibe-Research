@@ -1,3 +1,5 @@
+import { InvestmentComparePage } from '@/pages/InvestmentComparePage';
+import { InvestmentTasksPage } from '@/pages/InvestmentTasksPage';
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
 import { DailyReview } from "@/pages/DailyReview";
@@ -13,10 +15,17 @@ import { MyReports } from "@/pages/MyReports";
 import { Notes } from "@/pages/Notes";
 import { Settings } from "@/pages/Settings";
 
+import { InvestmentJournalPage } from "@/pages/InvestmentJournalPage";
+import { InvestmentWorkbench } from "@/pages/InvestmentWorkbench";
+
 export const router = createBrowserRouter([
   {
     element: <Layout />,
     children: [
+      { path: "/investment-workbench", element: <InvestmentWorkbench /> },
+      { path: "/investment-workbench/compare", element: <InvestmentComparePage /> },
+      { path: "/investment-workbench/tasks", element: <InvestmentTasksPage /> },
+      { path: "/investment-workbench/journal", element: <InvestmentJournalPage /> },
       { path: "/", element: <Navigate to="/daily-review" replace /> },
       { path: "/daily-review", element: <DailyReview /> },
       { path: "/intel", element: <Intel /> },

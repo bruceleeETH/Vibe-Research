@@ -1,3 +1,4 @@
+import { InvestmentCardLink } from '@/features/workbench/InvestmentCardLink';
 import { useMemo, useState } from "react";
 import { Plus, X, RefreshCw, Star } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -207,7 +208,7 @@ export function Watchlist() {
                       <td className="px-2 py-2.5 font-mono text-muted-foreground">{q?.pb ?? "—"}</td>
                       <td className="px-2 py-2.5 font-mono text-muted-foreground">{q?.turnover_pct ?? "—"}</td>
                       <td className="px-2 py-2.5">
-                        <button
+                        <InvestmentCardLink code={c} name={q?.name || ''} /><button
                           onClick={() => remove(c)}
                           className="text-muted-foreground/50 hover:text-destructive"
                           title="移除"

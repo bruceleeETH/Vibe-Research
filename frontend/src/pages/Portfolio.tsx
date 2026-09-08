@@ -1,3 +1,4 @@
+import { InvestmentCardLink } from '@/features/workbench/InvestmentCardLink';
 import { useState, useEffect, useCallback } from "react";
 import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -202,7 +203,7 @@ export function Portfolio() {
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl > 0 ? "+" : ""}{fmt(h.pnl)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl_pct > 0 ? "+" : ""}{h.pnl_pct}%</td>
                     <td className="px-2 py-2.5">
-                      <button onClick={() => remove(h.code)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
+                      <InvestmentCardLink code={h.code} name={h.name} /><button onClick={() => remove(h.code)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </td>
