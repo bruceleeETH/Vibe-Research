@@ -10,7 +10,7 @@ import { WorkbenchNav } from '@/features/workbench/WorkbenchNav';
 type Slot = 'morning' | 'evening';
 type Brief = { date: string; title: string; body: string; source_title: string; thread_id: string; date_basis: string; observed_at: string; last_seen_at: string; published_at: string | null };
 type Entry = {
-  slot: Slot; label: string; status: 'available' | 'pending' | 'missing' | 'not_configured'; latest_date: string | null; sync_overdue: boolean;
+  slot: Slot; label: string; status: 'available' | 'pending' | 'missing' | 'not_configured'; latest_date: string | null; sync_overdue: boolean; sync_due_at: string | null; sync_grace_minutes: number;
   source: { title?: string; thread_id?: string; last_checked_at?: string; last_success_at?: string; last_error?: string; schedule?: { times: string[] } };
   record: Brief | null;
 };
@@ -80,7 +80,7 @@ export function InvestmentBriefsPage() {
         <p className="mt-4 min-h-6 text-sm">{item.record?.title || (item.status === 'pending' ? '产出后会同步到这里，可先回看上一期。' : '目前没有该日期的正文，已有归档仍可回看。')}</p>
         <div className="mt-3 space-y-1 text-xs leading-5 text-muted-foreground"><p>来源：{item.source.title || '未配置'}</p><p>最近检查：{stamp(item.source.last_checked_at)}</p><p>同步计划：{item.source.schedule ? item.source.schedule.times.join(' / ') + '，需本机 Codex 可运行' : '尚未配置自动同步'}</p></div>
         {item.source.last_error && <p role="alert" className="mt-3 rounded-lg bg-red-500/10 p-3 text-xs leading-5 text-red-500">最近同步失败：{item.source.last_error}。保留已归档正文。</p>}
-        {item.sync_overdue && !item.source.last_error && <p className="mt-3 text-xs text-amber-500">今天尚无同步检查记录；计划配置不代表已运行。</p>}
+        {item.sync_overdue && !item.source.last_error && <p className="mt-3 text-xs text-amber-500">同步检查已逾期：{stamp(item.sync_due_at)} 的计划在 {item.sync_grace_minutes} 分钟宽限后仍无检查记录。此前的手动检查不代表本次计划已运行。</p>}
         <div className="mt-4 flex flex-wrap gap-4 text-sm"><button onClick={() => setSelected(item.slot)} className="text-primary underline">{item.record ? '阅读本期' : '查看状态'}</button>{item.latest_date && item.latest_date !== date && <button className="text-primary underline" onClick={() => { setSelected(item.slot); chooseDate(item.latest_date!); }}>最近归档 {item.latest_date}</button>}{item.source.thread_id && <a href={'https://chatgpt.com/c/' + item.source.thread_id} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-muted-foreground hover:text-primary">打开来源任务<ArrowUpRight size={14} /></a>}</div>
       </section>;
     })}</div>

@@ -9,7 +9,7 @@ import os
 import re
 import tempfile
 from contextlib import contextmanager
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -229,6 +229,30 @@ def set_schedule(slot, automation_id, times):
     return {'slot': slot, 'schedule_recorded': True}
 
 
+def sync_deadline(source, current):
+    """A check before a scheduled occurrence cannot satisfy that occurrence.
+
+    Ten minutes allows the source read/import to finish. Configuration is not
+    evidence of a run; do not require occurrences before initial configuration.
+    """
+    schedule = source.get('schedule')
+    if not schedule:
+        return None
+    try:
+        configured = datetime.fromisoformat(schedule['configured_at'])
+        if configured.tzinfo is None:
+            raise ValueError()
+        due = []
+        for day in (current.date() - timedelta(days=1), current.date()):
+            for value in schedule['times']:
+                occurrence = datetime.combine(day, time.fromisoformat(value), TZ)
+                if configured <= occurrence <= current - timedelta(minutes=10):
+                    due.append(occurrence)
+        return max(due) if due else None
+    except (KeyError, TypeError, ValueError) as exc:
+        raise BriefError('同步计划时间无效，请检查本地配置') from exc
+
+
 def day_view(day=None):
     current = now()
     selected = valid_day(day) if day else current.date()
@@ -241,10 +265,13 @@ def day_view(day=None):
         due = datetime.combine(selected, time.fromisoformat(expected), TZ)
         status = 'available' if record else ('not_configured' if not source else ('pending' if current < due else 'missing'))
         checked = source.get('last_checked_at')
-        check_day = datetime.fromisoformat(checked).astimezone(TZ).date() if checked else None
+        checked_at = datetime.fromisoformat(checked).astimezone(TZ) if checked else None
+        required = sync_deadline(source, current)
+        overdue = bool(required and (not checked_at or checked_at < required))
         slots.append({'slot': slot, 'label': label, 'expected_at': due.isoformat(), 'status': status,
                       'source': source, 'record': record, 'latest_date': dates[0] if dates else None,
-                      'sync_overdue': not check_day or check_day < current.date()})
+                      'sync_due_at': required.isoformat() if required else None,
+                      'sync_grace_minutes': 10, 'sync_overdue': overdue})
     return {'date': selected.isoformat(), 'today': current.date().isoformat(), 'timezone': 'Asia/Shanghai',
             'read_at': current.isoformat(timespec='seconds'), 'slots': slots,
             'dates': sorted({r['date'] for r in state['records'].values()}, reverse=True)}

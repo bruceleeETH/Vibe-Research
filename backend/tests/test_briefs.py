@@ -73,6 +73,7 @@ def test_incomplete_truncated_empty_future_items_are_not_archived():
 
 
 def test_failure_and_missing_day_preserve_previous_body(monkeypatch):
+    store.set_schedule('morning', 'sync-morning', ['08:15', '09:15'])
     store.import_thread('morning', payload())
     store.record_failure('morning', '来源暂不可读')
     assert store.day_view('2026-09-09')['slots'][0]['record']
@@ -164,3 +165,36 @@ def test_schedule_configuration_does_not_claim_a_run():
     source = store.day_view()['slots'][0]['source']
     assert source['schedule']['times'] == ['08:15', '09:15']
     assert not source.get('last_checked_at')
+
+
+def test_early_manual_check_does_not_mask_missed_scheduled_run(monkeypatch):
+    monkeypatch.setattr(store, 'now', lambda: datetime(2026, 9, 10, 6, tzinfo=store.TZ))
+    store.set_schedule('morning', 'sync', ['08:15', '09:15'])
+    store.import_thread('morning', payload())
+    monkeypatch.setattr(store, 'now', lambda: datetime(2026, 9, 10, 8, 24, tzinfo=store.TZ))
+    assert not store.day_view()['slots'][0]['sync_overdue']
+    monkeypatch.setattr(store, 'now', lambda: datetime(2026, 9, 10, 8, 25, tzinfo=store.TZ))
+    missed = store.day_view()['slots'][0]
+    assert missed['sync_overdue']
+    assert missed['sync_due_at'] == '2026-09-10T08:15:00+08:00'
+    store.import_thread('morning', payload())
+    assert not store.day_view()['slots'][0]['sync_overdue']
+    monkeypatch.setattr(store, 'now', lambda: datetime(2026, 9, 10, 9, 25, tzinfo=store.TZ))
+    assert store.day_view()['slots'][0]['sync_overdue']
+
+
+def test_new_configuration_has_no_retroactive_missed_runs(monkeypatch):
+    monkeypatch.setattr(store, 'now', lambda: datetime(2026, 9, 10, 10, tzinfo=store.TZ))
+    store.set_schedule('morning', 'sync', ['08:15', '09:15'])
+    assert not store.day_view()['slots'][0]['sync_overdue']
+    monkeypatch.setattr(store, 'now', lambda: datetime(2026, 9, 11, 8, 25, tzinfo=store.TZ))
+    assert store.day_view()['slots'][0]['sync_overdue']
+
+
+def test_yesterday_missed_evening_run_remains_overdue_after_midnight(monkeypatch):
+    store.set_schedule('evening', 'sync', ['22:45', '23:45'])
+    store.import_thread('evening', payload('# 9月9日晚间投资简报'), year_hint=2026)
+    monkeypatch.setattr(store, 'now', lambda: datetime(2026, 9, 11, 0, 10, tzinfo=store.TZ))
+    result = store.day_view()['slots'][1]
+    assert result['sync_overdue']
+    assert result['sync_due_at'] == '2026-09-10T23:45:00+08:00'
