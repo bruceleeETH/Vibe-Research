@@ -551,8 +551,7 @@ def em_get(url: str, params: dict | None = None, headers: dict | None = None, ti
 
 # ---------------------------------------------------------------------------
 # 打板层 · 涨停/炸板/跌停/昨涨停 原始池（东财 push2ex，走 em_get 限流）
-# ⚠️ 合规：原始池含个股 code/name —— 仅供 market.py 聚合成【不含个股名】的短线情绪指标。
-#    切勿把原始池直接接成 API/UI（会甩个股名单、破产品「零标的」红线）。
+# 原始池供市场情绪统计使用；全量日期清单与样本归档由 limitup.py 负责校验。
 # ---------------------------------------------------------------------------
 _ZTB_UT = "7eea3edcaed734bea9cbfc24409ed989"
 
@@ -568,7 +567,12 @@ def em_zt_topic_pool(endpoint: str, date: str, sort: str = "fbt:asc") -> list[di
     headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
     try:
         r = em_get(url, params=params, headers=headers, timeout=10)
-        return (r.json().get("data") or {}).get("pool") or []
+        payload = r.json()
+        data = payload.get("data") or {}
+        # 盘前请求今天可能返回上一交易日池；必须核验来源日期。
+        if payload.get("rc") != 0 or str(data.get("qdate")) != date:
+            return []
+        return data.get("pool") or []
     except Exception:
         return []
 

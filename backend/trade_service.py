@@ -353,6 +353,7 @@ class TradeService:
         reported_at: str | None = None,
         trade_id: str | None = None,
         dry_run: bool = False,
+        chronological: bool = False,
     ) -> dict:
         started = time.perf_counter()
         code = str(code).strip()
@@ -395,6 +396,8 @@ class TradeService:
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
                 }
 
+            if chronological and any(t.get("code") == code and t.get("date", "") > day for t in trades):
+                raise TradeError("请按成交日期顺序补录，不能将更早成交直接应用到当前持仓")
             portfolio = _read_json(self.portfolio_path, {"holdings": [], "last_refresh": None})
             portfolio.setdefault("holdings", [])
             state_raw = _read_json(self.workflow.state_file, {})
@@ -504,13 +507,14 @@ class TradeService:
         *,
         quantity: int,
         price: str | int | float,
-        cost: str | int | float,
+        cost: str | int | float | None,
         name: str | None = None,
         trade_date: str | None = None,
         reported_at: str | None = None,
         trade_id: str | None = None,
         close_position: bool = False,
         dry_run: bool = False,
+        chronological: bool = False,
     ) -> dict:
         started = time.perf_counter()
         code = str(code).strip()
@@ -519,7 +523,7 @@ class TradeService:
         if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
             raise TradeError("数量必须是正整数")
         price_value = _decimal(price, "价格")
-        cost_value = _decimal(cost, "成本")
+        cost_value = _decimal(cost, "成本") if cost is not None else None
         day = _validate_date(trade_date)
         timestamp = str(reported_at or _now_iso()).strip()
         identity = str(trade_id or uuid.uuid4().hex).strip()
@@ -532,7 +536,7 @@ class TradeService:
             trades = trade_log.setdefault("trades", [])
             duplicate = next((item for item in trades if item.get("id") == identity), None)
             if duplicate is not None:
-                expected = (code, quantity, float(price_value), float(cost_value), day, "sell")
+                expected = (code, quantity, float(price_value), float(cost_value) if cost_value is not None else float(duplicate.get("cost", 0)), day, "sell")
                 actual = (
                     duplicate.get("code"),
                     duplicate.get("quantity"),
@@ -553,6 +557,8 @@ class TradeService:
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
                 }
 
+            if chronological and any(t.get("code") == code and t.get("date", "") > day for t in trades):
+                raise TradeError("请按成交日期顺序补录，不能将更早成交直接应用到当前持仓")
             portfolio = _read_json(self.portfolio_path, {"holdings": [], "last_refresh": None})
             portfolio.setdefault("holdings", [])
             state_raw = _read_json(self.workflow.state_file, {})
@@ -569,6 +575,11 @@ class TradeService:
             )
 
             existing = next((item for item in portfolio["holdings"] if item.get("code") == code), None)
+            if cost_value is None:
+                if existing is None:
+                    raise TradeError("本地没有该证券持仓，不能从工作台补录卖出；请先核对期初持仓")
+                cost_value = _decimal(existing.get("cost"), "本地持仓成本")
+                close_position = Decimal(str(existing.get("shares", 0))) == quantity
             position_after = None
             if existing is not None:
                 current_shares = Decimal(str(existing.get("shares", 0)))
