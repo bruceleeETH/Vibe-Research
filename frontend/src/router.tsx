@@ -1,4 +1,5 @@
 import { InvestmentComparePage } from '@/pages/InvestmentComparePage';
+import { InvestmentBriefsPage } from '@/pages/InvestmentBriefsPage';
 import { InvestmentTasksPage } from '@/pages/InvestmentTasksPage';
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
@@ -23,6 +24,7 @@ export const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { path: "/investment-workbench", element: <InvestmentWorkbench /> },
+      { path: "/investment-workbench/briefs", element: <InvestmentBriefsPage /> },
       { path: "/investment-workbench/compare", element: <InvestmentComparePage /> },
       { path: "/investment-workbench/tasks", element: <InvestmentTasksPage /> },
       { path: "/investment-workbench/journal", element: <InvestmentJournalPage /> },

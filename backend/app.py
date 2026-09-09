@@ -36,6 +36,7 @@ import screener
 import storage
 from workbench import router as workbench_router
 from workbench_journal import router as workbench_journal_router
+from briefs import router as briefs_router
 
 app = FastAPI(title="Vibe-Research API", version="0.2.2")
 app.include_router(limitup.router)
@@ -43,6 +44,7 @@ app.include_router(limitup_outcomes.router)
 app.include_router(limitup_predictions.router)
 app.include_router(workbench_router)
 app.include_router(workbench_journal_router)
+app.include_router(briefs_router)
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
