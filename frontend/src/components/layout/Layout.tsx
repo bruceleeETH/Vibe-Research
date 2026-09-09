@@ -160,7 +160,7 @@ export function Layout() {
                 <a href={MAIL_URL} className="transition-colors hover:text-primary">Email</a>
               </div>
               <p className="text-[11px] leading-relaxed text-muted-foreground/60">
-                {APP_VERSION} · 不荐股 · 不预测 · 无倾向
+                {APP_VERSION} · {pathname === "/daily-review" ? "行情与研究" : "不荐股 · 不预测 · 无倾向"}
               </p>
             </>
           )}

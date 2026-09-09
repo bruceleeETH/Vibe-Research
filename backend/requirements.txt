@@ -8,3 +8,6 @@ requests
 akshare>=1.10
 mootdx>=0.10
 pandas
+
+# 本地涨停研究的数值计算
+numpy>=1.24

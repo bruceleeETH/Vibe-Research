@@ -441,7 +441,7 @@ export function DailyReview() {
         ))}
       </div>
 
-      <Disclaimer />
+      <Disclaimer research />
     </div>
   );
 }
