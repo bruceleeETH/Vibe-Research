@@ -37,6 +37,7 @@ def build_current_universe(rows: list[dict], as_of: str, min_mcap: float = 3_000
         "mainboard": 0,
         "eligible": 0,
         "st_or_retiring": 0,
+        "not_listed_or_no_quote": 0,
         "below_mcap": 0,
         "missing_mcap": 0,
     }
@@ -54,9 +55,15 @@ def build_current_universe(rows: list[dict], as_of: str, min_mcap: float = 3_000
             mcap = float(mcap) if mcap is not None else None
         except (TypeError, ValueError):
             mcap = None
+        try:
+            price = float(row.get("price")) if row.get("price") is not None else None
+        except (TypeError, ValueError):
+            price = None
 
         if "ST" in upper or "退" in name:
             reason = "st_or_retiring"
+        elif price is None or price <= 0:
+            reason = "not_listed_or_no_quote"
         elif mcap is None or mcap <= 0:
             reason = "missing_mcap"
         elif mcap < min_mcap:
@@ -75,7 +82,7 @@ def build_current_universe(rows: list[dict], as_of: str, min_mcap: float = 3_000
             "code": code,
             "name_asof": name,
             "is_st": "ST" in upper,
-            "trade_status": "1" if row.get("price") not in (None, 0) else "0",
+            "trade_status": "1" if price is not None and price > 0 else "0",
             "total_mcap_cny": mcap,
             "eligible": not reason,
             "exclusion_reason": reason,

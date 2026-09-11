@@ -27,6 +27,7 @@ def test_current_universe_excludes_st_retiring_small_and_missing_mcap():
         row("600003", "测试退"),
         row("600004", mcap=2_999_999_999),
         row("600005", mcap=None),
+        row("600006", price=None),
         row("300001"),
     ]
 
@@ -34,10 +35,11 @@ def test_current_universe_excludes_st_retiring_small_and_missing_mcap():
 
     assert [item["code"] for item in result["eligible"]] == ["600001"]
     assert result["counts"] == {
-        "snapshot": 6,
-        "mainboard": 5,
+        "snapshot": 7,
+        "mainboard": 6,
         "eligible": 1,
         "st_or_retiring": 2,
+        "not_listed_or_no_quote": 1,
         "below_mcap": 1,
         "missing_mcap": 1,
     }
@@ -45,6 +47,7 @@ def test_current_universe_excludes_st_retiring_small_and_missing_mcap():
     assert reasons["600002"] == "st_or_retiring"
     assert reasons["600004"] == "below_mcap"
     assert reasons["600005"] == "missing_mcap"
+    assert reasons["600006"] == "not_listed_or_no_quote"
 
 
 def test_market_cap_boundary_is_inclusive():
