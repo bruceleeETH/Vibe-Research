@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import math
+import socket
+import time
 
 
 HISTORY_FIELDS = (
@@ -46,20 +48,33 @@ def _rows(result) -> list[dict]:
 class BaoStockSource:
     """管理 Baostock 会话并提供可验证的原始/前复权日线。"""
 
-    def __init__(self, module=None):
+    def __init__(self, module=None, timeout=30, retries=3):
         if module is None:
             try:
                 import baostock as module
             except ImportError as exc:
                 raise BaoStockError("缺少 baostock，请安装 backend/requirements.txt") from exc
         self.module = module
+        self.timeout = max(5, int(timeout))
+        self.retries = max(1, int(retries))
         self.logged_in = False
 
-    def __enter__(self):
-        result = self.module.login()
+    def _login(self):
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(self.timeout)
+        try:
+            result = self.module.login()
+        finally:
+            socket.setdefaulttimeout(old_timeout)
         if str(getattr(result, "error_code", "")) != "0":
             raise BaoStockError(str(getattr(result, "error_msg", "")) or "Baostock 登录失败")
+        if getattr(self.module, "__name__", "") == "baostock":
+            from baostock.common import context
+            context.default_socket.settimeout(self.timeout)
         self.logged_in = True
+
+    def __enter__(self):
+        self._login()
         return self
 
     def __exit__(self, exc_type, exc, traceback):
@@ -67,16 +82,37 @@ class BaoStockSource:
             self.module.logout()
             self.logged_in = False
 
+    def _reconnect(self):
+        try:
+            if self.logged_in:
+                self.module.logout()
+        except Exception:
+            pass
+        self.logged_in = False
+        self._login()
+
     def _history(self, symbol: str, start: str, end: str, adjustflag: str) -> list[dict]:
-        result = self.module.query_history_k_data_plus(
-            symbol,
-            HISTORY_FIELDS,
-            start_date=start,
-            end_date=end,
-            frequency="d",
-            adjustflag=adjustflag,
-        )
-        return _rows(result)
+        last_error = None
+        for attempt in range(self.retries):
+            try:
+                result = self.module.query_history_k_data_plus(
+                    symbol,
+                    HISTORY_FIELDS,
+                    start_date=start,
+                    end_date=end,
+                    frequency="d",
+                    adjustflag=adjustflag,
+                )
+                if result is None:
+                    raise BaoStockError("Baostock 返回空响应对象")
+                return _rows(result)
+            except (BaoStockError, OSError, TimeoutError, socket.timeout) as exc:
+                last_error = exc
+                if attempt + 1 >= self.retries:
+                    break
+                time.sleep(2 ** attempt)
+                self._reconnect()
+        raise BaoStockError(f"{symbol} 日线请求失败：{last_error}") from last_error
 
     def fetch_symbol(self, symbol: str, start: str, end: str) -> dict:
         """抓取单票不复权/前复权日线，返回规范化 bars 与 qfq factors。"""

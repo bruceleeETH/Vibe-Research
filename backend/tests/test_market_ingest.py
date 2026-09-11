@@ -83,3 +83,24 @@ def test_baostock_error_code_is_not_treated_as_empty_success():
     with BaoStockSource(module=module) as source:
         with pytest.raises(BaoStockError, match="source failed"):
             source.fetch_symbol("sh.600001", "2026-09-01", "2026-09-11")
+
+
+def test_history_reconnects_after_transient_source_error(monkeypatch):
+    module = FakeBaoStock()
+    original = module.query_history_k_data_plus
+    calls = 0
+    monkeypatch.setattr("market_ingest.time.sleep", lambda _: None)
+
+    def flaky(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return Result([], [], error_code="10002007", error_msg="network error")
+        return original(*args, **kwargs)
+
+    module.query_history_k_data_plus = flaky
+    with BaoStockSource(module=module, retries=2) as source:
+        result = source.fetch_symbol("sh.600001", "2026-09-01", "2026-09-11")
+
+    assert calls == 3
+    assert len(result["bars"]) == 1
