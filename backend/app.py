@@ -38,7 +38,7 @@ from workbench import router as workbench_router
 from workbench_journal import router as workbench_journal_router
 from briefs import router as briefs_router
 
-app = FastAPI(title="Vibe-Research API", version="0.2.2")
+app = FastAPI(title="Vibe-Research API", version="0.2.3")
 app.include_router(limitup.router)
 app.include_router(limitup_outcomes.router)
 app.include_router(limitup_predictions.router)
@@ -93,7 +93,7 @@ def _validate(code: str) -> str:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "vibe-research-api", "version": "0.2.2"}
+    return {"ok": True, "service": "vibe-research-api", "version": "0.2.3"}
 
 
 class LLMConfig(BaseModel):

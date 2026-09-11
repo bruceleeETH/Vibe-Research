@@ -10,10 +10,12 @@ Vibe-Research is a self-hosted personal AI investment research dashboard for A�
 
 ```
 Vibe-Research/
-├── a-stock-data/       Self-contained A-share data toolkit (10 layers, 40 endpoints, v3.3). SKILL.md has copy-paste code per endpoint.
-├── global-stock-data/  Self-contained US/HK data toolkit (v1.0.1).
+├── a-stock-data/       Self-contained A-share data toolkit (10 layers, 44 endpoints, v3.5.1). SKILL.md has copy-paste code per endpoint.
+├── global-stock-data/  Self-contained US/HK data toolkit (v2.0.3).
 ├── backend/            FastAPI on :8900 — HTTP API + MCP server, ports the two data toolkits above.
 ├── frontend/           Vite + React 19 + TS + Tailwind on :5899 — proxies /api → :8900.
+├── research/           Versioned research notes; private trading ledger is gitignored.
+├── tools/              Local review, trade, brief-sync, and trend-study commands.
 ├── newinfo710/         (scratch / experimental data)
 ├── docs/               Screenshots and product docs.
 └── start.sh / start.command   One-shot launcher (venv + npm install first run, then backend + frontend + browser).
@@ -44,6 +46,7 @@ cd frontend && npm install && npm run dev
 
 # Frontend build / preview
 cd frontend && npm run build      # tsc -b && vite build
+cd frontend && npm test           # trend-engine pure-function tests
 cd frontend && npm run preview
 ```
 
@@ -59,11 +62,11 @@ cd backend && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/pytest tests/test_api.py::test_name    # single test
 ```
 
-The `live` marker is registered in `backend/conftest.py`; default runs skip it via `-m "not live"`. Frontend has no test suite — verify UI changes by running the app in a browser.
+The `live` marker is registered in `backend/conftest.py`; default runs skip it via `-m "not live"`. Frontend currently has a focused trend-engine suite; continue to verify UI changes in a browser.
 
 ## Backend Architecture
 
-Entry point: `backend/app.py` — FastAPI. Every route is under `/api/*`, read-only, stateless, keyed by user-supplied stock code. The app validates codes as `^\d{6}$` before hitting data layers.
+Entry point: `backend/app.py` — FastAPI. Every route is under `/api/*`. Market-data routes are read-only; workbench, portfolio, reports, briefs, and journal routes write only to the user's local data directory. Stock-code routes validate codes as `^\d{6}$` before hitting data layers.
 
 Module responsibilities:
 
@@ -71,12 +74,14 @@ Module responsibilities:
 - `gstock.py` — US/HK/KR data. Reuses `astock.em_get` for 东财 access so it goes direct instead of through a VPN proxy.
 - `newsradar.py` + `news_sources.json` — 12-track / 108-source RSS pipeline (stdlib only, compliance-filtered word list).
 - `market.py` — index / breadth / sector-flow / global-indices aggregation for the daily-review page.
-- `portfolio.py`, `myreports.py`, `reviewpool.py`, `samples.py`, `screener.py`, `storage.py` — local-only state (positions, uploaded reports, review pool, shadow-sample scheduler, screening, disk cache). All persist to `backend/.cache/*.json` — gitignored, never uploaded.
+- `portfolio.py`, `myreports.py`, `reviewpool.py`, `samples.py`, `screener.py`, `storage.py` — local-only state (positions, uploaded reports, review pool, shadow-sample scheduler, screening, disk cache). User assets persist under `~/.vibe-research/` by default; rebuildable caches remain under `backend/.cache/`. Both are outside version control.
+- `workbench.py`, `workbench_journal.py`, `brief_store.py`, `briefs.py` — investment cards, evidence, trade-cycle review, tasks, and morning/evening brief archives. Writes use local file locks and atomic replacement.
+- `limitup.py`, `limitup_outcomes.py`, `limitup_predictions.py` — dated Eastmoney limit-up samples, next-session outcomes, and nearest-neighbour estimates released only after temporal validation.
 - `chat.py` — system-AI chat with OpenAI-compatible function-calling; the LLM picks data tools. The frontend sends `{baseURL, apiKey, model}` in each request; the backend **does not persist keys**.
 - `cli_runtime.py` — “subscription mode” — spawns a locally-installed CLI (Claude Code / Codex / Qwen / DeepSeek) with the full prompt in-band. Single-shot, no multi-turn tool calls — use it for review/summary flows where data is already gathered.
-- `mcp_server.py` — MCP server exposing four core tools (`query_quote / query_valuation / query_reports / query_news`) for external agents like Claude Code.
+- `mcp_server.py` — MCP server exposing the same 23 objective data tools used by API chat for external agents like Claude Code.
 
-Two background schedulers boot with the app (see `app.py`): `pf.start_scheduler(1800)` for positions refresh, `samples.start_scheduler()` for post-close shadow-sample archiving. Keep those responsibilities in the scheduler owners, not sprinkled into request handlers.
+Four background schedulers boot with the app (see `app.py`): positions refresh, post-close shadow samples, full limit-up snapshots, and next-session outcome collection. Keep those responsibilities in the scheduler owners, not sprinkled into request handlers.
 
 ### Optional environment variables (backend)
 
@@ -85,14 +90,15 @@ Two background schedulers boot with the app (see `app.py`): `pf.start_scheduler(
 
 ## Frontend Architecture
 
-Vite + React 19 + TS + Tailwind, single-page router (`src/router.tsx`) with 11 pages under one `Layout`:
+Vite + React 19 + TS + Tailwind, single-page router (`src/router.tsx`) with 19 routes under one `Layout`.
 
-`/daily-review` (`DailyReview`) · `/intel` · `/sectors` + `/sectors/:key` · `/portfolio` · `/stock-data` · `/watchlist` · `/review-pool` · `/my-reports` · `/notes` · `/settings`.
+The original dashboard routes remain, plus `/investment-workbench` and its briefs, trend-lab, comparison, tasks, and journal views.
 
 Notable dirs:
 
 - `src/pages/*.tsx` — one file per route.
 - `src/features/review/` — Review Pool feature split into `PoolView`, `ScanView`, `StatsView`, `DetailDrawer`, `MiniKline`, `shared` (a refactor pulled these out of a 1317-line monolith — keep new review-pool code in this split).
+- `src/features/workbench/` and `src/features/limitup/` — local investment planning, evidence, trend-study calculations, and next-session limit-up research.
 - `src/lib/` — API client (`api.ts`), LLM plumbing (`llm.ts`, `ai-models.ts`), local storage helpers (`watchlist.ts`, `notes.ts`).
 - `src/data/`, `src/hooks/`, `src/components/` — data adapters, hooks, and shared UI.
 
