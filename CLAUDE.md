@@ -77,11 +77,23 @@ Module responsibilities:
 - `portfolio.py`, `myreports.py`, `reviewpool.py`, `samples.py`, `screener.py`, `storage.py` — local-only state (positions, uploaded reports, review pool, shadow-sample scheduler, screening, disk cache). User assets persist under `~/.vibe-research/` by default; rebuildable caches remain under `backend/.cache/`. Both are outside version control.
 - `workbench.py`, `workbench_journal.py`, `brief_store.py`, `briefs.py` — investment cards, evidence, trade-cycle review, tasks, and morning/evening brief archives. Writes use local file locks and atomic replacement.
 - `limitup.py`, `limitup_outcomes.py`, `limitup_predictions.py` — dated Eastmoney limit-up samples, next-session outcomes, and nearest-neighbour estimates released only after temporal validation.
+- `market_store.py`, `market_universe.py`, `market_ingest.py`, `trend_study.py` — versioned DuckDB store for current-snapshot mainboard research. Raw prices/amounts and qfq factors remain separate; API readers and the ingestion CLI share a cross-process lock. Never overwrite old revisions or present the current market-cap filter as point-in-time history.
 - `chat.py` — system-AI chat with OpenAI-compatible function-calling; the LLM picks data tools. The frontend sends `{baseURL, apiKey, model}` in each request; the backend **does not persist keys**.
 - `cli_runtime.py` — “subscription mode” — spawns a locally-installed CLI (Claude Code / Codex / Qwen / DeepSeek) with the full prompt in-band. Single-shot, no multi-turn tool calls — use it for review/summary flows where data is already gathered.
 - `mcp_server.py` — MCP server exposing the same 23 objective data tools used by API chat for external agents like Claude Code.
 
 Four background schedulers boot with the app (see `app.py`): positions refresh, post-close shadow samples, full limit-up snapshots, and next-session outcome collection. Keep those responsibilities in the scheduler owners, not sprinkled into request handlers.
+
+The reusable mainboard store is managed explicitly rather than by an Uvicorn scheduler:
+
+```bash
+backend/.venv/bin/python tools/market_data.py status
+backend/.venv/bin/python tools/market_data.py verify
+backend/.venv/bin/python tools/market_data.py backfill --all
+backend/.venv/bin/python tools/market_data.py export
+```
+
+Its default path is `~/.vibe-research/market-data/market.duckdb`. Large market data and Parquet exports never belong in the repository.
 
 ### Optional environment variables (backend)
 

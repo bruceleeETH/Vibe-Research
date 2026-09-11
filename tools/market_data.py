@@ -185,6 +185,9 @@ def parser() -> argparse.ArgumentParser:
     sub = command.add_subparsers(dest="command", required=True)
     sub.add_parser("init")
     sub.add_parser("status")
+    sub.add_parser("verify")
+    export = sub.add_parser("export")
+    export.add_argument("--target", help="Parquet 导出根目录；默认 market-data/exports")
     backfill = sub.add_parser("backfill")
     mode = backfill.add_mutually_exclusive_group()
     mode.add_argument("--sample", type=int, default=50, help="按交易所和市值分位抽样，默认 50")
@@ -206,6 +209,10 @@ def main() -> None:
         result = store.status()
     elif args.command == "status":
         result = store.status()
+    elif args.command == "verify":
+        result = store.verify()
+    elif args.command == "export":
+        result = store.export_parquet(args.target)
     else:
         if args.months <= 0 or args.warmup_days < 20 or args.batch_size <= 0:
             raise SystemExit("months 必须为正数，warmup-days 至少 20，batch-size 必须为正数")

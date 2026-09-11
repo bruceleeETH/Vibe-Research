@@ -3,6 +3,7 @@ import sys
 import time
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from market_store import MarketStore, StoreValidationError
@@ -140,3 +141,24 @@ def test_reader_waits_for_writer_process_lock(tmp_path):
     stdout, stderr = process.communicate(timeout=5)
     assert process.returncode == 0, stderr
     assert stdout.strip() == "0"
+
+
+def test_verify_and_export_active_revision_as_parquet(tmp_path):
+    store = MarketStore(tmp_path / "store")
+    store.initialize()
+    store.commit_ingest(
+        "fixture", "2026-09-11", "test", *sample_batch(),
+    )
+
+    report = store.verify()
+    manifest = store.export_parquet(tmp_path / "exports")
+
+    assert report["valid"] is True
+    assert report["vwap_range_violations"] == 0
+    assert manifest["revision"] == 1
+    export = tmp_path / "exports" / "revision-1"
+    assert (export / "manifest.json").exists()
+    assert duckdb.connect().execute(
+        "SELECT count(*) FROM read_parquet(?)",
+        [str(export / "daily_bars.parquet")],
+    ).fetchone()[0] == 1

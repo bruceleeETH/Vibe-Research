@@ -52,13 +52,20 @@ def test_market_store_status_universe_and_bars():
         "/api/market-store/bars",
         params={"codes": "600001", "start": "2026-09-11", "end": "2026-09-11"},
     )
+    trend = client.get(
+        "/api/market-store/trend-snapshot",
+        params={"date": "2026-09-11"},
+    )
 
     assert status.status_code == 200
     assert status.json()["bars"] == 1
     assert universe.status_code == 200
     assert universe.json()["rows"][0]["symbol"] == "sh.600001"
     assert bars.status_code == 200
+    assert bars.json()["revision"] == 1
     assert bars.json()["rows"][0]["vwap_qfq"] == 10
+    assert trend.status_code == 200
+    assert trend.json()["observed"] == 1
 
 
 def test_market_store_api_rejects_bad_codes_and_revision():
@@ -69,3 +76,7 @@ def test_market_store_api_rejects_bad_codes_and_revision():
         params={"codes": "bad", "start": "2026-09-11", "end": "2026-09-11"},
     ).status_code == 400
     assert client.get("/api/market-store/universe", params={"revision": 999}).status_code == 400
+    assert client.get(
+        "/api/market-store/trend-snapshot",
+        params={"date": "2026-09-11", "mode": "bad"},
+    ).status_code == 400

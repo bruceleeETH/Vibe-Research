@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 import uuid
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -246,6 +247,18 @@ class MarketStore:
             connection = duckdb.connect(str(self.path))
             try:
                 self._create_schema(connection)
+            finally:
+                connection.close()
+
+    @contextmanager
+    def read_connection(self):
+        """提供受共享锁保护的只读连接，供领域查询复用。"""
+        if not self.path.exists():
+            raise FileNotFoundError(f"市场库尚未建立：{self.path}")
+        with self._reader():
+            connection = duckdb.connect(str(self.path), read_only=True)
+            try:
+                yield connection
             finally:
                 connection.close()
 
@@ -615,3 +628,118 @@ class MarketStore:
                 }
             finally:
                 connection.close()
+
+    def verify(self) -> dict:
+        """核验 active revision 的覆盖、均价区间、重复和日期质量。"""
+        status = self.status()
+        if not self.path.exists() or not status["active_revision"]:
+            return status | {"valid": False, "reason": "市场库尚无数据"}
+        with self.read_connection() as connection:
+            date_count = connection.execute(
+                "SELECT count(DISTINCT trade_date) FROM current_daily_bars"
+            ).fetchone()[0]
+            coverage = connection.execute("""
+                WITH counts AS (
+                    SELECT symbol,count(*) AS rows,min(trade_date) AS first_date,
+                           max(trade_date) AS last_date
+                    FROM current_daily_bars GROUP BY symbol
+                )
+                SELECT count(*),min(rows),max(rows),
+                       count(*) FILTER (WHERE rows<?),
+                       coalesce(sum(?-rows) FILTER (WHERE rows<?),0)
+                FROM counts
+            """, [date_count, date_count, date_count]).fetchone()
+            quality = connection.execute("""
+                SELECT
+                    count(*) FILTER (WHERE b.is_st),
+                    count(*) FILTER (WHERE b.trade_status<>'1'),
+                    count(*) FILTER (
+                        WHERE b.volume_shares>0 AND b.amount_cny>0
+                          AND (
+                            b.amount_cny/b.volume_shares*f.qfq_factor
+                              < b.low_raw*f.qfq_factor-greatest(0.02,b.high_raw*f.qfq_factor*0.001)
+                            OR b.amount_cny/b.volume_shares*f.qfq_factor
+                              > b.high_raw*f.qfq_factor+greatest(0.02,b.high_raw*f.qfq_factor*0.001)
+                          )
+                    ),
+                    min(f.qfq_factor),max(f.qfq_factor)
+                FROM current_daily_bars b
+                JOIN current_adjust_factors f USING(trade_date,symbol)
+            """).fetchone()
+            return status | {
+                "valid": quality[2] == 0,
+                "trading_dates": date_count,
+                "coverage": {
+                    "symbols": coverage[0],
+                    "min_rows": coverage[1],
+                    "max_rows": coverage[2],
+                    "short_symbols": coverage[3],
+                    "missing_rows_vs_full_window": coverage[4],
+                },
+                "historical_st_rows": quality[0],
+                "suspended_rows": quality[1],
+                "vwap_range_violations": quality[2],
+                "qfq_factor_min": quality[3],
+                "qfq_factor_max": quality[4],
+            }
+
+    def export_parquet(self, target_root: str | Path | None = None) -> dict:
+        """把 active revision 导出为不可变 Parquet 切片，供其他分析直接读取。"""
+        status = self.status()
+        revision = status["active_revision"]
+        if not revision:
+            raise ValueError("市场库尚无可导出数据")
+        root = Path(target_root) if target_root else self.root / "exports"
+        target = root / f"revision-{revision}"
+        manifest_path = target / "manifest.json"
+        if manifest_path.exists():
+            return json.loads(manifest_path.read_text(encoding="utf-8"))
+        root.mkdir(parents=True, exist_ok=True)
+        temp = Path(tempfile.mkdtemp(prefix=f".revision-{revision}-", dir=root))
+
+        def quoted(path: Path) -> str:
+            return path.as_posix().replace("'", "''")
+
+        try:
+            with self.read_connection() as connection:
+                connection.execute(
+                    f"COPY current_instruments TO '{quoted(temp / 'instruments.parquet')}' "
+                    "(FORMAT PARQUET, COMPRESSION ZSTD)"
+                )
+                connection.execute(
+                    f"COPY current_universe_daily TO '{quoted(temp / 'universe.parquet')}' "
+                    "(FORMAT PARQUET, COMPRESSION ZSTD)"
+                )
+                connection.execute(f"""
+                    COPY (
+                        SELECT b.*,f.qfq_factor,
+                               b.open_raw*f.qfq_factor AS open_qfq,
+                               b.high_raw*f.qfq_factor AS high_qfq,
+                               b.low_raw*f.qfq_factor AS low_qfq,
+                               b.close_raw*f.qfq_factor AS close_qfq,
+                               CASE WHEN b.volume_shares>0 AND b.amount_cny>=0
+                                    THEN b.amount_cny/b.volume_shares*f.qfq_factor END AS vwap_qfq
+                        FROM current_daily_bars b
+                        JOIN current_adjust_factors f USING(trade_date,symbol)
+                        ORDER BY b.symbol,b.trade_date
+                    ) TO '{quoted(temp / "daily_bars.parquet")}'
+                    (FORMAT PARQUET, COMPRESSION ZSTD)
+                """)
+            manifest = {
+                "schema_version": SCHEMA_VERSION,
+                "revision": revision,
+                "created_at": datetime.now(TZ).isoformat(),
+                "status": status,
+                "files": ["instruments.parquet", "universe.parquet", "daily_bars.parquet"],
+            }
+            (temp / "manifest.json").write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temp.replace(target)
+            return manifest
+        except Exception:
+            for child in temp.glob("*"):
+                child.unlink(missing_ok=True)
+            temp.rmdir()
+            raise

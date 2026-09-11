@@ -7,6 +7,7 @@ from datetime import date
 from fastapi import APIRouter, HTTPException, Query
 
 from market_store import MarketStore
+import trend_study
 
 
 router = APIRouter(prefix="/api/market-store", tags=["market-store"])
@@ -25,7 +26,9 @@ def status():
 @router.get("/dates")
 def dates(revision: int | None = Query(None, ge=1)):
     try:
-        return {"revision": revision, "dates": store().dates(revision)}
+        market_store = store()
+        selected = revision or market_store.status()["active_revision"]
+        return {"revision": selected, "dates": market_store.dates(revision)}
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -58,7 +61,27 @@ def bars(
         end_day = date.fromisoformat(end)
         if start_day > end_day:
             raise ValueError("start 不能晚于 end")
-        rows = store().bars(items, start_day.isoformat(), end_day.isoformat(), revision)
-        return {"revision": revision, "codes": items, "start": start, "end": end, "rows": rows}
+        market_store = store()
+        selected = revision or market_store.status()["active_revision"]
+        rows = market_store.bars(items, start_day.isoformat(), end_day.isoformat(), revision)
+        return {"revision": selected, "codes": items, "start": start, "end": end, "rows": rows}
     except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/trend-snapshot")
+def trend_snapshot(
+    date: str,
+    volume: float = Query(1.5, ge=1, le=10),
+    mode: str = "day",
+    only_hits: bool = False,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+    revision: int | None = Query(None, ge=1),
+):
+    try:
+        return trend_study.date_snapshot(
+            store(), date, volume, mode, only_hits, page, page_size, revision,
+        )
+    except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(400, str(exc)) from exc

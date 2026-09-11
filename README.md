@@ -85,6 +85,25 @@ Vibe-Research 是一个开源的「个人 AI 投研看板」，**主推 A 股、
 
 这些扩展仍遵守“不荐股、不预测、不提供自动交易”的边界。工作台保存的是用户自己的研究计划与复盘，不代表产品判断。
 
+#### 主板历史数据仓
+
+趋势实验室可使用本地 DuckDB 复用沪深主板日线。当前首期口径为：非 ST、非退市整理、总市值不低于 30 亿元且已有交易行情；3 个月分析窗口另加 30 个交易日预热。股票池市值来自当前快照，因此首期结果只用于数据与规则验证，不冒充无幸存者偏差的历史回测。
+
+```bash
+# 查看状态与质量
+backend/.venv/bin/python tools/market_data.py status
+backend/.venv/bin/python tools/market_data.py verify
+
+# 50 只分层样本 / 全量断点续跑
+backend/.venv/bin/python tools/market_data.py backfill --sample 50
+backend/.venv/bin/python tools/market_data.py backfill --all
+
+# 导出可供 pandas / DuckDB / 其他分析复用的 Parquet
+backend/.venv/bin/python tools/market_data.py export
+```
+
+主库默认位于 `~/.vibe-research/market-data/market.duckdb`；Parquet 位于同目录的 `exports/revision-<版本>/`。数据文件不进入 Git。更新按小批次事务提交，重复执行会跳过已覆盖到截止日的证券。
+
 > **投研分析框架**：让 AI 分析个股时，自动按 估值 / 资金面 / 财报质量 / 行业景气 / 事件催化与风险 五维组织结论——框架只规定「怎么读数据」、不规定买卖，方向仍由你自己的 AI 决定。
 >
 > 连板股 / 成交额榜等均为**客观公开榜单数据，只呈现事实、不推荐、不预测**。

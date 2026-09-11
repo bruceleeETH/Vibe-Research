@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Activity, Download, Play, RefreshCw } from 'lucide-react';
 import { WorkbenchNav } from '@/features/workbench/WorkbenchNav';
 import { TrendDateReview } from '@/features/workbench/TrendDateReview';
+import { MainboardTrendSnapshot } from '@/features/workbench/MainboardTrendSnapshot';
 import { features, runStudy, type Options, type Stock, type TrendData } from '@/features/workbench/trendEngine';
 import { authHeaders } from '@/lib/api';
 
@@ -38,14 +39,18 @@ export function TrendLabPage() {
     try { const r = await fetch('/trend-lab-data.json', { cache: 'no-store' }); if (!r.ok) throw new Error('本地行情未生成，请运行采集命令'); const d = await r.json() as TrendData; if (!Array.isArray(d.stocks) || !d.stocks.length) throw new Error('没有有效观察池数据'); setData(d); }
     catch (e) { setError(e instanceof Error ? e.message : '读取失败'); } finally { setLoading(false); }
   }
+  async function loadMarketStore() {
+    try {
+      const response = await fetch('/api/market-store/status', { headers: authHeaders() });
+      if (!response.ok) throw new Error('数据仓状态读取失败');
+      setMarketStore(await response.json() as MarketStoreStatus);
+    } catch {
+      setMarketStore(null);
+    }
+  }
   useEffect(() => {
     void load();
-    void fetch('/api/market-store/status', { headers: authHeaders() })
-      .then(async response => {
-        if (!response.ok) throw new Error('数据仓状态读取失败');
-        setMarketStore(await response.json() as MarketStoreStatus);
-      })
-      .catch(() => setMarketStore(null));
+    void loadMarketStore();
   }, []);
   const study = useMemo(() => data ? runStudy(data, options) : null, [data, options]);
   const base = useMemo(() => data ? runStudy(data, { ...options, mode: 'none' }) : null, [data, options]);
@@ -60,15 +65,11 @@ export function TrendLabPage() {
   }
   return <div className="mx-auto max-w-[1500px] space-y-6 p-4 md:p-8">
     <WorkbenchNav />
-    <header className="flex flex-wrap items-start justify-between gap-4"><div><div className="mb-2 flex items-center gap-2 text-sm text-primary"><Activity size={17} /> 本地研究 · 观察池试跑</div><h1 className="text-3xl font-semibold tracking-tight">趋势策略验证</h1><p className="mt-2 text-sm text-muted-foreground">选择尾盘买入日期，以当天收盘价对照隔日开盘、最低、最高、均价、收盘。</p></div><button onClick={() => void load()} disabled={loading} className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm"><RefreshCw size={15} />{loading ? '读取中…' : '重读本地行情'}</button></header>
+    <header className="flex flex-wrap items-start justify-between gap-4"><div><div className="mb-2 flex items-center gap-2 text-sm text-primary"><Activity size={17} /> 本地研究 · 观察池试跑</div><h1 className="text-3xl font-semibold tracking-tight">趋势策略验证</h1><p className="mt-2 text-sm text-muted-foreground">选择尾盘买入日期，以当天收盘价对照隔日开盘、最低、最高、均价、收盘。</p></div><button onClick={() => { void load(); void loadMarketStore(); }} disabled={loading} className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm"><RefreshCw size={15} />{loading ? '读取中…' : '重读本地行情'}</button></header>
     {error && <p role="alert" className="rounded-xl bg-red-500/10 p-4 text-red-500">{error}</p>}
     {!data && !error && <p className="p-10">正在读取本地行情…</p>}
     {data && study && base && <>
-      {marketStore && <section className="rounded-xl border border-border bg-card px-5 py-4 text-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3"><strong>主板历史数据仓</strong><span className="text-xs text-muted-foreground">data revision {marketStore.active_revision}</span></div>
-        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4"><div><span className="block text-xs text-muted-foreground">已采集股票</span><strong>{marketStore.bar_symbols.toLocaleString()}</strong></div><div><span className="block text-xs text-muted-foreground">股票池记录</span><strong>{marketStore.eligible_symbols.toLocaleString()}</strong></div><div><span className="block text-xs text-muted-foreground">日线记录</span><strong>{marketStore.bars.toLocaleString()}</strong></div><div><span className="block text-xs text-muted-foreground">数据范围</span><strong>{marketStore.min_date ?? '—'} — {marketStore.max_date ?? '—'}</strong></div></div>
-        <p className="mt-3 text-xs leading-5 text-muted-foreground">全量主板回填按批次写入本地 DuckDB；当前策略表仍使用下方 15 股金标切片，待服务端趋势计算验收后再切换，避免浏览器加载全市场行情。</p>
-      </section>}
+      {marketStore && <MainboardTrendSnapshot status={marketStore} options={options} />}
       <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-sm leading-7"><strong>覆盖 {data.stocks.length}/{data.expected_count} 只指定主板股票 · 非全市场回测</strong><p>数据截至 {data.cutoff}，研究窗口 {data.start} — {data.cutoff}。截图观察池存在事后选样偏差；板块热度及历史 ST 状态未验收，当前命中仅是价格与量能条件命中。</p><p className="text-xs text-muted-foreground">采集时间 {new Date(data.generated_at).toLocaleString('zh-CN', { hour12: false })} · 腾讯前复权日线 + 新浪历史成交额 · {data.errors.length} 项行情采集失败 · {data.stocks.filter(s => s.average_coverage?.status !== 'history_complete').length} 只均价未完整</p></div>
       <TrendDateReview data={data} options={options} />
       <details className="rounded-2xl border border-border bg-card p-5"><summary className="cursor-pointer font-semibold">收盘条件探索统计（展开查看）</summary><div className="mt-5 space-y-5">
