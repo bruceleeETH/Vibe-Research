@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { authHeaders } from '@/lib/api';
 import { beijingDate } from '@/features/workbench/GuidedEntry';
 import { WorkbenchNav } from '@/features/workbench/WorkbenchNav';
+import { BriefSyncButton } from '@/features/workbench/BriefSyncButton';
 
 type Slot = 'morning' | 'evening';
 type Brief = { date: string; title: string; body: string; source_title: string; thread_id: string; date_basis: string; observed_at: string; last_seen_at: string; published_at: string | null };
@@ -64,6 +65,7 @@ export function InvestmentBriefsPage() {
       <button disabled={loading} onClick={() => void refresh()} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50"><RefreshCw size={15} className={loading ? 'animate-spin' : ''} />{loading ? '正在读取…' : '刷新归档'}</button>
     </header>
     <WorkbenchNav />
+    <BriefSyncButton onComplete={() => void refresh()} />
     <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
       <CalendarDays size={18} className="text-primary" /><label htmlFor="brief-date" className="text-sm">简报日期</label>
       <input id="brief-date" type="date" value={date} onChange={event => chooseDate(event.target.value)} className="rounded-lg border border-border bg-background px-3 py-2 text-sm" />
@@ -93,7 +95,7 @@ export function InvestmentBriefsPage() {
           img: ({ alt }) => <span className="text-muted-foreground">〔{alt || '原文图片'}：请到来源任务查看〕</span>,
           table: ({ children }) => <div className="overflow-x-auto"><table>{children}</table></div>,
         }}>{readableBody(record.body)}</ReactMarkdown></article>
-      </> : <div className="p-10 text-center"><p>{labels[entry.status]}</p><p className="mt-3 text-sm text-muted-foreground">“刷新归档”只重新读取本地内容；来源任务有新正文后，由定时同步归档。</p>{entry.latest_date && <button className="mt-4 text-sm text-primary underline" onClick={() => chooseDate(entry.latest_date!)}>阅读最近一期（{entry.latest_date}）</button>}</div>}
+      </> : <div className="p-10 text-center"><p>{labels[entry.status]}</p><p className="mt-3 text-sm text-muted-foreground">点击“同步早晚简报”检查来源新内容；“刷新归档”只重新读取本地已保存内容。</p>{entry.latest_date && <button className="mt-4 text-sm text-primary underline" onClick={() => chooseDate(entry.latest_date!)}>阅读最近一期（{entry.latest_date}）</button>}</div>}
     </section>}
     <footer className="flex flex-wrap justify-between gap-3 text-xs leading-6 text-muted-foreground"><span>页面读取时间：{stamp(data?.read_at)}。断网、休眠或来源不可读时，归档可能延迟。</span><Link to="/investment-workbench/tasks" className="text-primary underline">查看今日待办与复查 →</Link></footer>
   </div>;

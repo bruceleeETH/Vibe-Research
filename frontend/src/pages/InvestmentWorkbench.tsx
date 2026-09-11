@@ -1,4 +1,5 @@
 import { WorkbenchNav } from '@/features/workbench/WorkbenchNav';
+import { BriefSyncButton } from '@/features/workbench/BriefSyncButton';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useBlocker, useSearchParams } from 'react-router-dom';
 import { Plus, Save, Trash2, Download, Upload, ClipboardCheck, Search } from 'lucide-react';
@@ -125,6 +126,7 @@ export function InvestmentWorkbench() {
       <label className={button + ' cursor-pointer'}><Upload size={15} />恢复<input aria-label="选择备份文件" type="file" accept=".json" className="hidden" disabled={!ready || busy} onChange={async e => { const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; try { if (file.size > 10_000_000) throw new Error('文件不能超过 10 MB'); const s = JSON.parse(await file.text()); if (!Array.isArray(s.cards) || !Number.isInteger(s.revision)) throw new Error('不是工作台备份文件'); setRestore(s); setError(''); } catch (err) { setError(err instanceof Error ? err.message : '读取失败'); } }} /></label></div>
     </header>
     <WorkbenchNav />
+    <BriefSyncButton />
     <div className="grid grid-cols-3 gap-3">{[['研究卡片', state.cards.length], ['待复查', state.cards.filter(due).length], ['待核验证据', state.cards.flatMap(c => c.evidence).filter(e => e.status === '未核验').length]].map(([label, value]) => <div key={label} className="rounded-xl border border-border bg-card px-5 py-4"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p></div>)}</div>
     <div aria-live="polite" className="min-h-6 text-sm">{error ? <span role="alert" className="text-red-500">{error} <button className="underline" onClick={() => { if (discard()) window.location.reload(); }}>重新加载</button></span> : <span className="text-primary">{message || '本地保存 · 仅保留当前记录 · 风险额度未启用'}</span>}</div>
     {restore && <div className="rounded-xl border border-primary bg-primary/5 p-4"><p>备份包含 {restore.cards.length} 张卡片，将替换当前 {state.cards.length} 张卡片。包含工作台关联与复盘；不包含原始成交文件。现有持仓与成交不受影响。</p><div className="mt-3 flex gap-2"><button className={button} disabled={busy} onClick={async () => { if (discard() && await run(() => api('/restore', { revision: state.revision, snapshot: restore }), '已恢复备份', true)) setRestore(null); }}>确认替换工作台记录</button><button className={button} onClick={() => setRestore(null)}>取消</button></div></div>}

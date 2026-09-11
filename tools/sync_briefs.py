@@ -36,11 +36,17 @@ def main():
     schedule.add_argument('--times', nargs='+', required=True)
     view = sub.add_parser('status')
     view.add_argument('--date')
+    for command in ('start-manual', 'finish-manual'):
+        manual = sub.add_parser(command)
+        manual.add_argument('--request-id', required=True)
     args = parser.parse_args()
     if args.data_dir:
         os.environ['VR_DATA_DIR'] = args.data_dir
     try:
-        if args.command == 'configure':
+        if args.command in ('start-manual', 'finish-manual'):
+            from brief_manual_sync import start, finish
+            result = (start if args.command == 'start-manual' else finish)(args.request_id)
+        elif args.command == 'configure':
             result = configure(args.slot, args.thread_id, args.title)
         elif args.command == 'import':
             try:
