@@ -74,6 +74,11 @@ def test_initialize_and_commit_revision(tmp_path):
     assert status["eligible_symbols"] == 1
     assert store.covered_symbols(["sh.600001", "sz.000002"], "2026-09-11") == {"sh.600001"}
     assert store.covered_symbols(["sh.600001"], "2026-09-12") == set()
+    assert store.dates() == ["2026-09-11"]
+    universe_page = store.universe()
+    assert universe_page["revision"] == 1
+    assert universe_page["total"] == 1
+    assert universe_page["rows"][0]["symbol"] == "sh.600001"
     assert store.bars(["600001"], "2026-09-11", "2026-09-11")[0]["vwap_qfq"] == pytest.approx(10)
 
 

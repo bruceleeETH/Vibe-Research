@@ -3,11 +3,20 @@ import { Activity, Download, Play, RefreshCw } from 'lucide-react';
 import { WorkbenchNav } from '@/features/workbench/WorkbenchNav';
 import { TrendDateReview } from '@/features/workbench/TrendDateReview';
 import { features, runStudy, type Options, type Stock, type TrendData } from '@/features/workbench/trendEngine';
+import { authHeaders } from '@/lib/api';
 
 const defaults: Options = { volume: 1.5, stop: 5, days: 3, cost: 0.2, mode: 'day', entryTiming: 'signal-close' };
 const fmt = (n: number | undefined | null, suffix = '%') => n == null ? '—' : `${n.toFixed(2)}${suffix}`;
 const tone = (n?: number | null) => n == null ? '' : n > 0 ? 'text-red-500' : n < 0 ? 'text-emerald-600' : '';
 const cell = 'px-3 py-3 text-right whitespace-nowrap';
+type MarketStoreStatus = {
+  active_revision: number;
+  eligible_symbols: number;
+  bar_symbols: number;
+  bars: number;
+  min_date: string | null;
+  max_date: string | null;
+};
 
 function PriceChart({ stock }: { stock: Stock }) {
   const rows = stock.bars.slice(-60), offset = stock.bars.length - rows.length;
@@ -19,6 +28,7 @@ function PriceChart({ stock }: { stock: Stock }) {
 
 export function TrendLabPage() {
   const [data, setData] = useState<TrendData | null>(null), [error, setError] = useState('');
+  const [marketStore, setMarketStore] = useState<MarketStoreStatus | null>(null);
   const [draft, setDraft] = useState<Options>(defaults), [options, setOptions] = useState<Options>(defaults);
   const [code, setCode] = useState('600869'), [tab, setTab] = useState<'latest' | 'history'>('latest');
   const [onlyHit, setOnlyHit] = useState(false), [historyCode, setHistoryCode] = useState(''), [page, setPage] = useState(0);
@@ -28,7 +38,15 @@ export function TrendLabPage() {
     try { const r = await fetch('/trend-lab-data.json', { cache: 'no-store' }); if (!r.ok) throw new Error('本地行情未生成，请运行采集命令'); const d = await r.json() as TrendData; if (!Array.isArray(d.stocks) || !d.stocks.length) throw new Error('没有有效观察池数据'); setData(d); }
     catch (e) { setError(e instanceof Error ? e.message : '读取失败'); } finally { setLoading(false); }
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    void fetch('/api/market-store/status', { headers: authHeaders() })
+      .then(async response => {
+        if (!response.ok) throw new Error('数据仓状态读取失败');
+        setMarketStore(await response.json() as MarketStoreStatus);
+      })
+      .catch(() => setMarketStore(null));
+  }, []);
   const study = useMemo(() => data ? runStudy(data, options) : null, [data, options]);
   const base = useMemo(() => data ? runStudy(data, { ...options, mode: 'none' }) : null, [data, options]);
   const stock = data?.stocks.find(s => s.code === code) ?? data?.stocks[0];
@@ -46,6 +64,11 @@ export function TrendLabPage() {
     {error && <p role="alert" className="rounded-xl bg-red-500/10 p-4 text-red-500">{error}</p>}
     {!data && !error && <p className="p-10">正在读取本地行情…</p>}
     {data && study && base && <>
+      {marketStore && <section className="rounded-xl border border-border bg-card px-5 py-4 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3"><strong>主板历史数据仓</strong><span className="text-xs text-muted-foreground">data revision {marketStore.active_revision}</span></div>
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4"><div><span className="block text-xs text-muted-foreground">已采集股票</span><strong>{marketStore.bar_symbols.toLocaleString()}</strong></div><div><span className="block text-xs text-muted-foreground">股票池记录</span><strong>{marketStore.eligible_symbols.toLocaleString()}</strong></div><div><span className="block text-xs text-muted-foreground">日线记录</span><strong>{marketStore.bars.toLocaleString()}</strong></div><div><span className="block text-xs text-muted-foreground">数据范围</span><strong>{marketStore.min_date ?? '—'} — {marketStore.max_date ?? '—'}</strong></div></div>
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">全量主板回填按批次写入本地 DuckDB；当前策略表仍使用下方 15 股金标切片，待服务端趋势计算验收后再切换，避免浏览器加载全市场行情。</p>
+      </section>}
       <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-sm leading-7"><strong>覆盖 {data.stocks.length}/{data.expected_count} 只指定主板股票 · 非全市场回测</strong><p>数据截至 {data.cutoff}，研究窗口 {data.start} — {data.cutoff}。截图观察池存在事后选样偏差；板块热度及历史 ST 状态未验收，当前命中仅是价格与量能条件命中。</p><p className="text-xs text-muted-foreground">采集时间 {new Date(data.generated_at).toLocaleString('zh-CN', { hour12: false })} · 腾讯前复权日线 + 新浪历史成交额 · {data.errors.length} 项行情采集失败 · {data.stocks.filter(s => s.average_coverage?.status !== 'history_complete').length} 只均价未完整</p></div>
       <TrendDateReview data={data} options={options} />
       <details className="rounded-2xl border border-border bg-card p-5"><summary className="cursor-pointer font-semibold">收盘条件探索统计（展开查看）</summary><div className="mt-5 space-y-5">

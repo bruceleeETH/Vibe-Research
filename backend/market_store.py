@@ -529,3 +529,89 @@ class MarketStore:
                 return {row[0] for row in rows}
             finally:
                 connection.close()
+
+    def dates(self, revision: int | None = None) -> list[str]:
+        """返回指定 revision 可见的交易日期。"""
+        if not self.path.exists():
+            return []
+        with self._reader():
+            connection = duckdb.connect(str(self.path), read_only=True)
+            try:
+                active = int(connection.execute(
+                    "SELECT value FROM store_meta WHERE key='active_revision'"
+                ).fetchone()[0])
+                selected = active if revision is None else int(revision)
+                if selected < 1 or selected > active:
+                    raise ValueError(f"revision 必须在 1..{active} 范围内")
+                rows = connection.execute("""
+                    SELECT DISTINCT trade_date FROM daily_bars
+                    WHERE revision<=? ORDER BY trade_date
+                """, [selected]).fetchall()
+                return [row[0].isoformat() for row in rows]
+            finally:
+                connection.close()
+
+    def universe(self, revision: int | None = None, limit: int = 200,
+                 offset: int = 0, eligible_only: bool = True) -> dict:
+        """分页返回指定 revision 的最新股票池快照。"""
+        if not self.path.exists():
+            return {"revision": 0, "as_of": None, "total": 0, "rows": []}
+        limit = max(1, min(int(limit), 1000))
+        offset = max(0, int(offset))
+        with self._reader():
+            connection = duckdb.connect(str(self.path), read_only=True)
+            try:
+                active = int(connection.execute(
+                    "SELECT value FROM store_meta WHERE key='active_revision'"
+                ).fetchone()[0])
+                selected = active if revision is None else int(revision)
+                if selected < 1 or selected > active:
+                    raise ValueError(f"revision 必须在 1..{active} 范围内")
+                as_of = connection.execute(
+                    "SELECT max(trade_date) FROM universe_daily WHERE revision<=?",
+                    [selected],
+                ).fetchone()[0]
+                if as_of is None:
+                    return {"revision": selected, "as_of": None, "total": 0, "rows": []}
+                clause = "AND eligible" if eligible_only else ""
+                total = connection.execute(f"""
+                    WITH selected_rows AS (
+                        SELECT * FROM universe_daily WHERE revision<=?
+                        QUALIFY row_number() OVER (
+                            PARTITION BY trade_date,symbol ORDER BY revision DESC
+                        )=1
+                    )
+                    SELECT count(*) FROM selected_rows
+                    WHERE trade_date=? {clause}
+                """, [selected, as_of]).fetchone()[0]
+                cursor = connection.execute(f"""
+                    WITH selected_rows AS (
+                        SELECT * FROM universe_daily WHERE revision<=?
+                        QUALIFY row_number() OVER (
+                            PARTITION BY trade_date,symbol ORDER BY revision DESC
+                        )=1
+                    )
+                    SELECT trade_date,symbol,name_asof,is_st,trade_status,
+                           total_mcap_cny,eligible,exclusion_reason
+                    FROM selected_rows
+                    WHERE trade_date=? {clause}
+                    ORDER BY symbol LIMIT ? OFFSET ?
+                """, [selected, as_of, limit, offset])
+                names = [column[0] for column in cursor.description]
+                rows = [
+                    {
+                        name: value.isoformat() if isinstance(value, date) else value
+                        for name, value in zip(names, row)
+                    }
+                    for row in cursor.fetchall()
+                ]
+                return {
+                    "revision": selected,
+                    "as_of": as_of.isoformat(),
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset,
+                    "rows": rows,
+                }
+            finally:
+                connection.close()

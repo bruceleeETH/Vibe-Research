@@ -25,6 +25,7 @@ import gstock
 import newsradar
 import portfolio as pf
 import market
+import market_store_api
 import limitup
 import limitup_outcomes
 import limitup_predictions
@@ -45,6 +46,7 @@ app.include_router(limitup_predictions.router)
 app.include_router(workbench_router)
 app.include_router(workbench_journal_router)
 app.include_router(briefs_router)
+app.include_router(market_store_api.router)
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
