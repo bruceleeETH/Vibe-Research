@@ -18,12 +18,14 @@ import { Settings } from "@/pages/Settings";
 
 import { InvestmentJournalPage } from "@/pages/InvestmentJournalPage";
 import { InvestmentWorkbench } from "@/pages/InvestmentWorkbench";
+import { TrendLabPage } from "@/pages/TrendLabPage";
 
 export const router = createBrowserRouter([
   {
     element: <Layout />,
     children: [
       { path: "/investment-workbench", element: <InvestmentWorkbench /> },
+      { path: "/investment-workbench/trend-lab", element: <TrendLabPage /> },
       { path: "/investment-workbench/briefs", element: <InvestmentBriefsPage /> },
       { path: "/investment-workbench/compare", element: <InvestmentComparePage /> },
       { path: "/investment-workbench/tasks", element: <InvestmentTasksPage /> },

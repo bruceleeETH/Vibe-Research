@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 export function WorkbenchNav() {
   return <nav aria-label="投资工作台导航" className="flex flex-wrap gap-2">{[
     ['/investment-workbench/briefs', '每日简报'],
+    ['/investment-workbench/trend-lab', '趋势策略验证'],
     ['/investment-workbench/tasks', '日常待办'],
     ['/investment-workbench', '投资卡与计划'],
     ['/investment-workbench/compare', '主题与标的比较'],
