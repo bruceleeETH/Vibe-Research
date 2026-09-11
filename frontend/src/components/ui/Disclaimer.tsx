@@ -1,7 +1,8 @@
 import { Info } from "lucide-react";
 
 // 中立免责条 —— 产品定调：只客观呈现公开数据/榜单，不推荐、不预测、无倾向；方向由用户自己的 AI 给出。
-export function Disclaimer({ compact = false }: { compact?: boolean }) {
+export function Disclaimer({ compact = false, research = false }: { compact?: boolean; research?: boolean }) {
+  if (research) return <div className="mt-8 flex items-start gap-2 rounded-lg border border-border/60 bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>行情榜单来自公开数据；次日研究模块使用本地历史样本生成经时间检验的条件估计，与接入的 AI 复盘分别呈现。样本不足或检验未通过时不输出概率。历史验证不保证未来表现，研究结果不构成交易指令。</span></div>;
   if (compact) {
     return (
       <p className="text-[11px] leading-relaxed text-muted-foreground/70">

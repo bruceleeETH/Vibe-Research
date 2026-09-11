@@ -9,13 +9,14 @@ import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { storageGet, storageSet } from "@/lib/storage";
 
-const APP_VERSION = "v0.2.2";
+const APP_VERSION = "v0.2.3";
 const REPO_URL = "https://github.com/simonlin1212/Vibe-Research";
 // 作者联系方式
 const X_URL = "https://x.com/linsizhen";
 const MAIL_URL = "mailto:simonlin0423@gmail.com";
 
 const NAV = [
+  { to: "/investment-workbench", icon: NotebookPen, label: "投资工作台" },
   { to: "/daily-review", icon: Activity, label: "每日复盘" },
   { to: "/intel", icon: Radar, label: "资讯雷达" },
   { to: "/sectors", icon: LayoutGrid, label: "板块中心" },
@@ -71,7 +72,7 @@ export function Layout() {
         {/* Nav */}
         <nav className={cn("flex-1 space-y-1 overflow-auto", collapsed ? "p-1.5" : "p-2.5")}>
           {NAV.map(({ to, icon: Icon, label }) => {
-            const active = pathname === to;
+            const active = pathname === to || (to === "/investment-workbench" && pathname.startsWith(to + "/"));
             return (
               <div key={to}>
                 <Link
@@ -159,7 +160,7 @@ export function Layout() {
                 <a href={MAIL_URL} className="transition-colors hover:text-primary">Email</a>
               </div>
               <p className="text-[11px] leading-relaxed text-muted-foreground/60">
-                {APP_VERSION} · 不荐股 · 不预测 · 无倾向
+                {APP_VERSION} · {pathname === "/daily-review" ? "行情与研究" : "不荐股 · 不预测 · 无倾向"}
               </p>
             </>
           )}

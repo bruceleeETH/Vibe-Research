@@ -73,6 +73,37 @@ Vibe-Research 是一个开源的「个人 AI 投研看板」，**主推 A 股、
 | 📝&nbsp;**研&#8288;究&#8288;记&#8288;录** | 复盘 / 今日要点 / 问 AI / 辩论结果本地沉淀，随时回看 · **反思审计**：让 AI 回头审这段推理——哪些结论有数据撑着、哪些是脑补、最脆弱的一环在哪、要验证得看什么 |
 | 🔌&nbsp;**接&#8288;入&nbsp;AI** | 订阅接入（本机 CLI，免 key）· API 多模型（自动填 baseURL）· MCP（挂进 Claude Code 等 agent）|
 
+### 本地分叉扩展
+
+当前分支在开源看板之上增加了一套本地投资研究闭环：
+
+- **投资工作台**：研究卡、证据核验、入场与退出条件、复查日期、主题比较、日常待办和成交周期复盘。
+- **涨停次日研究**：盘后保存东方财富涨停池，回填下一交易日结果；最近邻估计只有通过时间隔离验证和概率校准门槛后才展示。
+- **早晚简报**：将已有 Codex 早间/晚间简报按日期同步到本地归档；不生成新简报，也不执行来源正文中的指令。
+- **趋势策略验证**：针对明确的 15 只观察池读取公开前复权日线，复核放量条件、T+1、跳空和不可成交情形。它是带选样偏差的研究实验，不是全市场回测。
+- **本地交易与四阶段复盘**：`./trade buy` 原子同步本地台账；盘前、竞价、午盘、盘后结论存入 `~/.vibe-research/`。
+
+这些扩展仍遵守“不荐股、不预测、不提供自动交易”的边界。工作台保存的是用户自己的研究计划与复盘，不代表产品判断。
+
+#### 主板历史数据仓
+
+趋势实验室可使用本地 DuckDB 复用沪深主板日线。当前首期口径为：非 ST、非退市整理、总市值不低于 30 亿元且已有交易行情；3 个月分析窗口另加 30 个交易日预热。股票池市值来自当前快照，因此首期结果只用于数据与规则验证，不冒充无幸存者偏差的历史回测。
+
+```bash
+# 查看状态与质量
+backend/.venv/bin/python tools/market_data.py status
+backend/.venv/bin/python tools/market_data.py verify
+
+# 50 只分层样本 / 全量断点续跑
+backend/.venv/bin/python tools/market_data.py backfill --sample 50
+backend/.venv/bin/python tools/market_data.py backfill --all
+
+# 导出可供 pandas / DuckDB / 其他分析复用的 Parquet
+backend/.venv/bin/python tools/market_data.py export
+```
+
+主库默认位于 `~/.vibe-research/market-data/market.duckdb`；Parquet 位于同目录的 `exports/revision-<版本>/`。数据文件不进入 Git。更新按小批次事务提交，重复执行会跳过已覆盖到截止日的证券。
+
 > **投研分析框架**：让 AI 分析个股时，自动按 估值 / 资金面 / 财报质量 / 行业景气 / 事件催化与风险 五维组织结论——框架只规定「怎么读数据」、不规定买卖，方向仍由你自己的 AI 决定。
 >
 > 连板股 / 成交额榜等均为**客观公开榜单数据，只呈现事实、不推荐、不预测**。
@@ -121,8 +152,12 @@ Vibe-Research/
 │   ├── chat.py          系统 AI（OpenAI 兼容 function-calling）
 │   ├── debate.py        多空辩论编排（事实底稿 → 多方 / 空方 / 中立主持）
 │   ├── reflection.py    反思审计（对已有分析做推理审计）
+│   ├── workbench*.py    投资卡、成交关联、任务与周期复盘
+│   ├── limitup*.py      涨停样本、次日结果与时间验证估计
+│   ├── brief*.py        早晚简报本地归档与手动同步
 │   └── mcp_server.py    MCP server（给 Claude Code 等 agent）
-└── frontend/          Vite + React 19 + TS + Tailwind（玻璃暖橙主题）:5899
+├── frontend/          Vite + React 19 + TS + Tailwind（玻璃暖橙主题）:5899
+└── tools/             交易记账、四阶段复盘、简报同步、趋势数据采集
 ```
 
 **分级依赖**：行情（腾讯）+ 研报 / 公告（东财）**秒装可用**；akshare / mootdx 惰性导入，缺失时对应端点返回 501 + 安装提示，不拖垮服务。
@@ -230,6 +265,10 @@ portfolio_manager 角色，产出「买 / 卖 / 仓位多少」。**本项目刻
 cd backend && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/pytest -m "not live"   # 离线单测 + API 校验（快、稳，无需联网）
 .venv/bin/pytest -m live          # 联网核对数据源 shape（升级 / 发布前跑一遍）
+
+cd ../frontend
+npm test                          # 趋势引擎纯函数测试
+npm run build                     # TypeScript + 生产构建
 ```
 
 ## 合规
@@ -237,7 +276,7 @@ cd backend && .venv/bin/pip install -r requirements-dev.txt
 - 只做客观数据整理与公开榜单呈现：**不荐股、不预测涨跌、不给买卖时机、不承诺收益、不做主观评分**；中立无倾向。
 - 连板股 / 成交额榜等均为**客观公开榜单数据**（东财 / 同花顺同款），产品只如实呈现、不附带任何推荐或预测。
 - 所有分析方向由你自己配置的 AI 给出，与本产品无关。UI 无买卖按钮；估值历史分位只标位置、不划买卖线。
-- **持仓 / 关注股 / 上传的研报 / API key 只存本地，不上传、不进仓库。**
+- **持仓 / 关注股 / 投资卡 / 交易台账 / 简报归档 / 上传的研报 / API key 只存本地，不上传、不进仓库。**
 - 持仓与上传的研报默认存在**用户目录 `~/.vibe-research/`**（可用环境变量 `VR_DATA_DIR` 换根目录、`VR_REPORTS_DIR` 单独指定研报目录）——在项目文件夹之外，**重新下载 / 覆盖更新项目文件夹不会丢数据**；旧版本存在 `backend/.cache/` 的数据，新版首次启动自动迁移（复制，原文件保留）。
 
 ## 相关生态

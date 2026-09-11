@@ -8,3 +8,10 @@ requests
 akshare>=1.10
 mootdx>=0.10
 pandas
+
+# 本地涨停研究的数值计算
+numpy>=1.24
+
+# 本地主板历史数据仓：列式分析库 + 历史日线/ST/停牌/复权
+duckdb>=1.5,<2
+baostock>=0.9.3,<1
