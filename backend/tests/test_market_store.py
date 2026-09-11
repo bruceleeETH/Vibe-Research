@@ -1,3 +1,8 @@
+import subprocess
+import sys
+import time
+from pathlib import Path
+
 import pytest
 
 from market_store import MarketStore, StoreValidationError
@@ -82,6 +87,9 @@ def test_repeated_ingest_updates_without_duplicate_rows(tmp_path):
     assert result["revision"] == 2
     assert store.status()["bars"] == 1
     assert store.bars(["600001"], "2026-09-11", "2026-09-11")[0]["close_raw"] == pytest.approx(10.1)
+    assert store.bars(
+        ["600001"], "2026-09-11", "2026-09-11", revision=1
+    )[0]["close_raw"] == pytest.approx(10.0)
 
 
 def test_invalid_batch_does_not_advance_active_revision(tmp_path):
@@ -100,3 +108,28 @@ def test_invalid_batch_does_not_advance_active_revision(tmp_path):
     assert status["active_revision"] == 0
     assert status["bars"] == 0
     assert status["failed_runs"] == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl 共享锁仅适用于 Unix")
+def test_reader_waits_for_writer_process_lock(tmp_path):
+    store = MarketStore(tmp_path)
+    store.initialize()
+    script = (
+        "from market_store import MarketStore;"
+        f"print(MarketStore({str(tmp_path)!r}).status()['active_revision'])"
+    )
+
+    with store._writer():
+        process = subprocess.Popen(
+            [sys.executable, "-c", script],
+            cwd=Path(__file__).resolve().parents[1],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(0.2)
+        assert process.poll() is None
+
+    stdout, stderr = process.communicate(timeout=5)
+    assert process.returncode == 0, stderr
+    assert stdout.strip() == "0"

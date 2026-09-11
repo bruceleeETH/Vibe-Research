@@ -19,7 +19,7 @@ import duckdb
 
 
 TZ = ZoneInfo("Asia/Shanghai")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class StoreValidationError(ValueError):
@@ -48,6 +48,19 @@ class MarketStore:
                 if fcntl is not None:
                     fcntl.flock(lock, fcntl.LOCK_UN)
 
+    @contextmanager
+    def _reader(self):
+        """与写入 CLI 共用文件锁，避免独立 DuckDB 进程同时读写同一文件。"""
+        self.root.mkdir(parents=True, exist_ok=True)
+        with self.lock_path.open("a") as lock:
+            if fcntl is not None:
+                fcntl.flock(lock, fcntl.LOCK_SH)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+
     @staticmethod
     def _create_schema(connection) -> None:
         connection.execute("""
@@ -55,18 +68,19 @@ class MarketStore:
                 key VARCHAR PRIMARY KEY,
                 value VARCHAR NOT NULL
             );
-            INSERT OR IGNORE INTO store_meta VALUES ('schema_version', '1');
+            INSERT OR IGNORE INTO store_meta VALUES ('schema_version', '2');
             INSERT OR IGNORE INTO store_meta VALUES ('active_revision', '0');
 
             CREATE TABLE IF NOT EXISTS instruments (
-                symbol VARCHAR PRIMARY KEY,
+                symbol VARCHAR NOT NULL,
                 code VARCHAR NOT NULL,
                 exchange VARCHAR NOT NULL,
                 board VARCHAR NOT NULL,
                 name_current VARCHAR NOT NULL,
                 list_date DATE,
                 delist_date DATE,
-                revision BIGINT NOT NULL
+                revision BIGINT NOT NULL,
+                PRIMARY KEY (symbol, revision)
             );
 
             CREATE TABLE IF NOT EXISTS universe_daily (
@@ -80,7 +94,7 @@ class MarketStore:
                 exclusion_reason VARCHAR NOT NULL,
                 ingest_run_id VARCHAR NOT NULL,
                 revision BIGINT NOT NULL,
-                PRIMARY KEY (trade_date, symbol)
+                PRIMARY KEY (trade_date, symbol, revision)
             );
 
             CREATE TABLE IF NOT EXISTS daily_bars (
@@ -100,7 +114,7 @@ class MarketStore:
                 ingest_run_id VARCHAR NOT NULL,
                 observed_at TIMESTAMPTZ NOT NULL,
                 revision BIGINT NOT NULL,
-                PRIMARY KEY (trade_date, symbol)
+                PRIMARY KEY (trade_date, symbol, revision)
             );
 
             CREATE TABLE IF NOT EXISTS adjust_factors (
@@ -110,7 +124,7 @@ class MarketStore:
                 source VARCHAR NOT NULL,
                 ingest_run_id VARCHAR NOT NULL,
                 revision BIGINT NOT NULL,
-                PRIMARY KEY (trade_date, symbol)
+                PRIMARY KEY (trade_date, symbol, revision)
             );
 
             CREATE TABLE IF NOT EXISTS ingest_runs (
@@ -138,6 +152,92 @@ class MarketStore:
                 detail VARCHAR NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL
             );
+        """)
+        version = int(connection.execute(
+            "SELECT value FROM store_meta WHERE key='schema_version'"
+        ).fetchone()[0])
+        if version == 1:
+            MarketStore._migrate_v1_to_v2(connection)
+        elif version != SCHEMA_VERSION:
+            raise RuntimeError(f"不支持的市场库 schema_version={version}")
+        MarketStore._create_views(connection)
+
+    @staticmethod
+    def _migrate_v1_to_v2(connection) -> None:
+        """把覆盖式主键迁移为带 revision 的追加式主键，保留已有样本。"""
+        connection.begin()
+        try:
+            connection.execute("""
+                CREATE TABLE instruments_v2 (
+                    symbol VARCHAR NOT NULL, code VARCHAR NOT NULL, exchange VARCHAR NOT NULL,
+                    board VARCHAR NOT NULL, name_current VARCHAR NOT NULL, list_date DATE,
+                    delist_date DATE, revision BIGINT NOT NULL,
+                    PRIMARY KEY (symbol, revision)
+                );
+                INSERT INTO instruments_v2 SELECT * FROM instruments;
+
+                CREATE TABLE universe_daily_v2 (
+                    trade_date DATE NOT NULL, symbol VARCHAR NOT NULL, name_asof VARCHAR NOT NULL,
+                    is_st BOOLEAN NOT NULL, trade_status VARCHAR NOT NULL, total_mcap_cny DOUBLE,
+                    eligible BOOLEAN NOT NULL, exclusion_reason VARCHAR NOT NULL,
+                    ingest_run_id VARCHAR NOT NULL, revision BIGINT NOT NULL,
+                    PRIMARY KEY (trade_date, symbol, revision)
+                );
+                INSERT INTO universe_daily_v2 SELECT * FROM universe_daily;
+
+                CREATE TABLE daily_bars_v2 (
+                    trade_date DATE NOT NULL, symbol VARCHAR NOT NULL, open_raw DOUBLE NOT NULL,
+                    high_raw DOUBLE NOT NULL, low_raw DOUBLE NOT NULL, close_raw DOUBLE NOT NULL,
+                    preclose_raw DOUBLE, volume_shares DOUBLE, amount_cny DOUBLE,
+                    turnover_pct DOUBLE, trade_status VARCHAR NOT NULL, is_st BOOLEAN NOT NULL,
+                    source VARCHAR NOT NULL, ingest_run_id VARCHAR NOT NULL,
+                    observed_at TIMESTAMPTZ NOT NULL, revision BIGINT NOT NULL,
+                    PRIMARY KEY (trade_date, symbol, revision)
+                );
+                INSERT INTO daily_bars_v2 SELECT * FROM daily_bars;
+
+                CREATE TABLE adjust_factors_v2 (
+                    trade_date DATE NOT NULL, symbol VARCHAR NOT NULL, qfq_factor DOUBLE NOT NULL,
+                    source VARCHAR NOT NULL, ingest_run_id VARCHAR NOT NULL, revision BIGINT NOT NULL,
+                    PRIMARY KEY (trade_date, symbol, revision)
+                );
+                INSERT INTO adjust_factors_v2 SELECT * FROM adjust_factors;
+
+                DROP TABLE instruments;
+                DROP TABLE universe_daily;
+                DROP TABLE daily_bars;
+                DROP TABLE adjust_factors;
+                ALTER TABLE instruments_v2 RENAME TO instruments;
+                ALTER TABLE universe_daily_v2 RENAME TO universe_daily;
+                ALTER TABLE daily_bars_v2 RENAME TO daily_bars;
+                ALTER TABLE adjust_factors_v2 RENAME TO adjust_factors;
+                UPDATE store_meta SET value='2' WHERE key='schema_version';
+            """)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    @staticmethod
+    def _create_views(connection) -> None:
+        """建立 active revision 视图；批次分段提交时自动继承较早版本数据。"""
+        connection.execute("""
+            CREATE OR REPLACE VIEW current_instruments AS
+                SELECT * FROM instruments
+                WHERE revision <= CAST((SELECT value FROM store_meta WHERE key='active_revision') AS BIGINT)
+                QUALIFY row_number() OVER (PARTITION BY symbol ORDER BY revision DESC)=1;
+            CREATE OR REPLACE VIEW current_universe_daily AS
+                SELECT * FROM universe_daily
+                WHERE revision <= CAST((SELECT value FROM store_meta WHERE key='active_revision') AS BIGINT)
+                QUALIFY row_number() OVER (PARTITION BY trade_date,symbol ORDER BY revision DESC)=1;
+            CREATE OR REPLACE VIEW current_daily_bars AS
+                SELECT * FROM daily_bars
+                WHERE revision <= CAST((SELECT value FROM store_meta WHERE key='active_revision') AS BIGINT)
+                QUALIFY row_number() OVER (PARTITION BY trade_date,symbol ORDER BY revision DESC)=1;
+            CREATE OR REPLACE VIEW current_adjust_factors AS
+                SELECT * FROM adjust_factors
+                WHERE revision <= CAST((SELECT value FROM store_meta WHERE key='active_revision') AS BIGINT)
+                QUALIFY row_number() OVER (PARTITION BY trade_date,symbol ORDER BY revision DESC)=1;
         """)
 
     def initialize(self) -> None:
@@ -241,14 +341,14 @@ class MarketStore:
                     connection.begin()
                     if instruments:
                         connection.executemany("""
-                            INSERT OR REPLACE INTO instruments VALUES (?,?,?,?,?,?,?,?)
+                            INSERT INTO instruments VALUES (?,?,?,?,?,?,?,?)
                         """, [[
                             row["symbol"], row["code"], row["exchange"], row["board"],
                             row["name_current"], row.get("list_date"), row.get("delist_date"), revision,
                         ] for row in instruments])
                     if universe_rows:
                         connection.executemany("""
-                            INSERT OR REPLACE INTO universe_daily VALUES (?,?,?,?,?,?,?,?,?,?)
+                            INSERT INTO universe_daily VALUES (?,?,?,?,?,?,?,?,?,?)
                         """, [[
                             row["trade_date"], row["symbol"], row["name_asof"], bool(row["is_st"]),
                             str(row["trade_status"]), row.get("total_mcap_cny"), bool(row["eligible"]),
@@ -256,7 +356,7 @@ class MarketStore:
                         ] for row in universe_rows])
                     if bars:
                         connection.executemany("""
-                            INSERT OR REPLACE INTO daily_bars VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            INSERT INTO daily_bars VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         """, [[
                             row["trade_date"], row["symbol"], row["open_raw"], row["high_raw"],
                             row["low_raw"], row["close_raw"], row.get("preclose_raw"),
@@ -266,7 +366,7 @@ class MarketStore:
                         ] for row in bars])
                     if factors:
                         connection.executemany("""
-                            INSERT OR REPLACE INTO adjust_factors VALUES (?,?,?,?,?,?)
+                            INSERT INTO adjust_factors VALUES (?,?,?,?,?,?)
                         """, [[
                             row["trade_date"], row["symbol"], row["qfq_factor"],
                             source, run_id, revision,
@@ -317,40 +417,46 @@ class MarketStore:
                 "failed_runs": 0,
                 "path": str(self.path),
             }
-        connection = duckdb.connect(str(self.path), read_only=True)
-        try:
-            revision = int(connection.execute(
-                "SELECT value FROM store_meta WHERE key='active_revision'"
-            ).fetchone()[0])
-            min_date, max_date, bars = connection.execute(
-                "SELECT min(trade_date),max(trade_date),count(*) FROM daily_bars"
-            ).fetchone()
-            latest_universe = connection.execute("SELECT max(trade_date) FROM universe_daily").fetchone()[0]
-            eligible = 0 if latest_universe is None else connection.execute(
-                "SELECT count(*) FROM universe_daily WHERE trade_date=? AND eligible",
-                [latest_universe],
-            ).fetchone()[0]
-            return {
-                "schema_version": SCHEMA_VERSION,
-                "active_revision": revision,
-                "instruments": connection.execute("SELECT count(*) FROM instruments").fetchone()[0],
-                "eligible_symbols": eligible,
-                "bar_symbols": connection.execute(
-                    "SELECT count(DISTINCT symbol) FROM daily_bars"
-                ).fetchone()[0],
-                "bars": bars,
-                "min_date": min_date.isoformat() if min_date else None,
-                "max_date": max_date.isoformat() if max_date else None,
-                "failed_runs": connection.execute(
-                    "SELECT count(*) FROM ingest_runs WHERE status='failed'"
-                ).fetchone()[0],
-                "path": str(self.path),
-            }
-        finally:
-            connection.close()
+        with self._reader():
+            connection = duckdb.connect(str(self.path), read_only=True)
+            try:
+                revision = int(connection.execute(
+                    "SELECT value FROM store_meta WHERE key='active_revision'"
+                ).fetchone()[0])
+                min_date, max_date, bars = connection.execute(
+                    "SELECT min(trade_date),max(trade_date),count(*) FROM current_daily_bars"
+                ).fetchone()
+                latest_universe = connection.execute(
+                    "SELECT max(trade_date) FROM current_universe_daily"
+                ).fetchone()[0]
+                eligible = 0 if latest_universe is None else connection.execute(
+                    "SELECT count(*) FROM current_universe_daily WHERE trade_date=? AND eligible",
+                    [latest_universe],
+                ).fetchone()[0]
+                return {
+                    "schema_version": SCHEMA_VERSION,
+                    "active_revision": revision,
+                    "instruments": connection.execute(
+                        "SELECT count(*) FROM current_instruments"
+                    ).fetchone()[0],
+                    "eligible_symbols": eligible,
+                    "bar_symbols": connection.execute(
+                        "SELECT count(DISTINCT symbol) FROM current_daily_bars"
+                    ).fetchone()[0],
+                    "bars": bars,
+                    "min_date": min_date.isoformat() if min_date else None,
+                    "max_date": max_date.isoformat() if max_date else None,
+                    "failed_runs": connection.execute(
+                        "SELECT count(*) FROM ingest_runs WHERE status='failed'"
+                    ).fetchone()[0],
+                    "path": str(self.path),
+                }
+            finally:
+                connection.close()
 
-    def bars(self, codes: list[str], start: str, end: str) -> list[dict]:
-        """按代码与日期查询原始/前复权价格及全天均价。"""
+    def bars(self, codes: list[str], start: str, end: str,
+             revision: int | None = None) -> list[dict]:
+        """按代码、日期和可选 revision 查询原始/前复权价格及全天均价。"""
         if not self.path.exists() or not codes:
             return []
         symbols = [
@@ -359,30 +465,48 @@ class MarketStore:
             for code in codes
         ]
         placeholders = ",".join("?" for _ in symbols)
-        connection = duckdb.connect(str(self.path), read_only=True)
-        try:
-            cursor = connection.execute(f"""
-                SELECT b.trade_date,b.symbol,b.open_raw,b.high_raw,b.low_raw,b.close_raw,
-                       b.preclose_raw,b.volume_shares,b.amount_cny,b.turnover_pct,
-                       b.trade_status,b.is_st,f.qfq_factor,
-                       b.open_raw*f.qfq_factor AS open_qfq,
-                       b.high_raw*f.qfq_factor AS high_qfq,
-                       b.low_raw*f.qfq_factor AS low_qfq,
-                       b.close_raw*f.qfq_factor AS close_qfq,
-                       CASE WHEN b.volume_shares>0 AND b.amount_cny>=0
-                            THEN b.amount_cny/b.volume_shares*f.qfq_factor END AS vwap_qfq
-                FROM daily_bars b
-                JOIN adjust_factors f USING(trade_date,symbol)
-                WHERE b.symbol IN ({placeholders}) AND b.trade_date BETWEEN ? AND ?
-                ORDER BY b.symbol,b.trade_date
-            """, [*symbols, start, end])
-            names = [column[0] for column in cursor.description]
-            return [
-                {
-                    name: value.isoformat() if isinstance(value, date) else value
-                    for name, value in zip(names, row)
-                }
-                for row in cursor.fetchall()
-            ]
-        finally:
-            connection.close()
+        with self._reader():
+            connection = duckdb.connect(str(self.path), read_only=True)
+            try:
+                active = int(connection.execute(
+                    "SELECT value FROM store_meta WHERE key='active_revision'"
+                ).fetchone()[0])
+                selected = active if revision is None else int(revision)
+                if selected < 1 or selected > active:
+                    raise ValueError(f"revision 必须在 1..{active} 范围内")
+                cursor = connection.execute(f"""
+                    WITH selected_bars AS (
+                        SELECT * FROM daily_bars WHERE revision<=?
+                        QUALIFY row_number() OVER (
+                            PARTITION BY trade_date,symbol ORDER BY revision DESC
+                        )=1
+                    ), selected_factors AS (
+                        SELECT * FROM adjust_factors WHERE revision<=?
+                        QUALIFY row_number() OVER (
+                            PARTITION BY trade_date,symbol ORDER BY revision DESC
+                        )=1
+                    )
+                    SELECT b.trade_date,b.symbol,b.open_raw,b.high_raw,b.low_raw,b.close_raw,
+                           b.preclose_raw,b.volume_shares,b.amount_cny,b.turnover_pct,
+                           b.trade_status,b.is_st,f.qfq_factor,
+                           b.open_raw*f.qfq_factor AS open_qfq,
+                           b.high_raw*f.qfq_factor AS high_qfq,
+                           b.low_raw*f.qfq_factor AS low_qfq,
+                           b.close_raw*f.qfq_factor AS close_qfq,
+                           CASE WHEN b.volume_shares>0 AND b.amount_cny>=0
+                                THEN b.amount_cny/b.volume_shares*f.qfq_factor END AS vwap_qfq
+                    FROM selected_bars b
+                    JOIN selected_factors f USING(trade_date,symbol)
+                    WHERE b.symbol IN ({placeholders}) AND b.trade_date BETWEEN ? AND ?
+                    ORDER BY b.symbol,b.trade_date
+                """, [selected, selected, *symbols, start, end])
+                names = [column[0] for column in cursor.description]
+                return [
+                    {
+                        name: value.isoformat() if isinstance(value, date) else value
+                        for name, value in zip(names, row)
+                    }
+                    for row in cursor.fetchall()
+                ]
+            finally:
+                connection.close()
