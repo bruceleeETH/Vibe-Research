@@ -42,6 +42,9 @@ frontend/tsconfig.tsbuildinfo
 # 本地参考资料（不进仓库）
 newinfo710/
 
+# 券商电子对账单含账户与交易信息，只允许保留在本机
+*证券电子对账单*.pdf
+
 # 分析产物目录（本地数据，不进仓库）
 data/
 
