@@ -510,3 +510,22 @@ class MarketStore:
                 ]
             finally:
                 connection.close()
+
+    def covered_symbols(self, symbols: list[str], end: str) -> set[str]:
+        """返回 active revision 中已覆盖到截止日的证券，供中断续跑跳过。"""
+        if not self.path.exists() or not symbols:
+            return set()
+        placeholders = ",".join("?" for _ in symbols)
+        with self._reader():
+            connection = duckdb.connect(str(self.path), read_only=True)
+            try:
+                rows = connection.execute(f"""
+                    SELECT symbol
+                    FROM current_daily_bars
+                    WHERE symbol IN ({placeholders})
+                    GROUP BY symbol
+                    HAVING max(trade_date)>=?
+                """, [*symbols, end]).fetchall()
+                return {row[0] for row in rows}
+            finally:
+                connection.close()

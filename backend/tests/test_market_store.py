@@ -72,6 +72,8 @@ def test_initialize_and_commit_revision(tmp_path):
     assert status["active_revision"] == 1
     assert status["bars"] == 1
     assert status["eligible_symbols"] == 1
+    assert store.covered_symbols(["sh.600001", "sz.000002"], "2026-09-11") == {"sh.600001"}
+    assert store.covered_symbols(["sh.600001"], "2026-09-12") == set()
     assert store.bars(["600001"], "2026-09-11", "2026-09-11")[0]["vwap_qfq"] == pytest.approx(10)
 
 

@@ -103,8 +103,15 @@ def run_backfill(args) -> dict:
 
     with BaoStockSource() as source:
         window = date_window(source, as_of, args.months, args.warmup_days)
-        for offset in range(0, len(selected), args.batch_size):
-            batch = selected[offset:offset + args.batch_size]
+        covered = store.covered_symbols(
+            [item["symbol"] for item in selected],
+            window["end"],
+        )
+        pending = [item for item in selected if item["symbol"] not in covered]
+        if covered:
+            print(f"[resume] 已覆盖到 {window['end']}：{len(covered)} 只，跳过重复采集", flush=True)
+        for offset in range(0, len(pending), args.batch_size):
+            batch = pending[offset:offset + args.batch_size]
             bars = []
             factors = []
             batch_errors = []
@@ -124,14 +131,14 @@ def run_backfill(args) -> dict:
                             "details": result["skipped"],
                         })
                     print(
-                        f"[{index}/{len(selected)}] {item['code']} {item['name_current']} "
+                        f"[{index}/{len(pending)}] {item['code']} {item['name_current']} "
                         f"{len(result['bars'])} rows",
                         flush=True,
                     )
                 except Exception as exc:
                     error = {"symbol": item["symbol"], "reason": f"{type(exc).__name__}: {exc}"}
                     batch_errors.append(error)
-                    print(f"[{index}/{len(selected)}] {item['code']} FAILED {exc}", flush=True)
+                    print(f"[{index}/{len(pending)}] {item['code']} FAILED {exc}", flush=True)
             successful = {row["symbol"] for row in bars}
             batch_instruments = [item for item in batch if item["symbol"] in successful]
             if bars:
@@ -161,6 +168,8 @@ def run_backfill(args) -> dict:
     return {
         "mode": "all" if args.all else f"sample{len(selected)}",
         "selected": len(selected),
+        "already_covered": len(covered),
+        "attempted": len(pending),
         "universe": universe["counts"],
         "window": window,
         "commits": committed,
