@@ -8,6 +8,7 @@ from __future__ import annotations
 import concurrent.futures
 import datetime as dt
 import json
+import math
 from pathlib import Path
 import urllib.request
 
@@ -43,6 +44,70 @@ def add_quote_average(bars: list[dict], quote: list) -> str:
         return 'latest_only'
     except (ValueError, TypeError, ZeroDivisionError):
         return 'missing'
+
+
+def merge_historical_averages(bars: list[dict], rows: list[dict]) -> dict:
+    """用未复权成交额/股数计算均价，再映射到腾讯前复权价格口径。"""
+    by_date = {str(row.get('date')): row for row in rows}
+    added = rejected = 0
+    for bar in bars:
+        if bar.get('average') is not None:
+            continue
+        row = by_date.get(bar['date'])
+        if not row:
+            continue
+        try:
+            volume = float(row['volume'])
+            amount = float(row['amount'])
+            raw_close = float(row['close'])
+            raw_low = float(row['low'])
+            raw_high = float(row['high'])
+            if not all(math.isfinite(value) and value > 0 for value in
+                       (volume, amount, raw_close, raw_low, raw_high)):
+                raise ValueError()
+            raw_average = amount / volume
+            if not raw_low - 0.02 <= raw_average <= raw_high + 0.02:
+                raise ValueError()
+            factor = bar['close'] / raw_close
+            average = raw_average * factor
+            tolerance = max(0.02, bar['high'] * 0.001)
+            if not math.isfinite(factor) or factor <= 0 or not bar['low'] - tolerance <= average <= bar['high'] + tolerance:
+                raise ValueError()
+            bar.update(
+                average=average,
+                amount=amount,
+                average_source='Sina daily amount/volume, adjusted to Tencent qfq close',
+                average_adjustment_factor=factor,
+            )
+            added += 1
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            rejected += 1
+    covered = sum(bar.get('average') is not None for bar in bars)
+    return {
+        'added': added,
+        'rejected': rejected,
+        'covered': covered,
+        'total': len(bars),
+        'status': 'history_complete' if covered == len(bars) else 'history_partial' if covered else 'missing',
+    }
+
+
+def fetch_historical_amounts(symbol: str, start: str, end: str) -> list[dict]:
+    """读取新浪未复权日线中的成交额与成交股数；依赖项目已安装的 akshare。"""
+    try:
+        import akshare as ak
+    except ImportError as exc:
+        raise RuntimeError('缺少 akshare；请使用 backend/.venv/bin/python 运行采集命令') from exc
+    frame = ak.stock_zh_a_daily(
+        symbol=symbol,
+        start_date=start.replace('-', ''),
+        end_date=end.replace('-', ''),
+        adjust='',
+    )
+    required = {'date', 'close', 'low', 'high', 'volume', 'amount'}
+    if frame.empty or not required.issubset(frame.columns):
+        raise ValueError('新浪历史成交额结构缺失')
+    return frame[list(required)].to_dict('records')
 
 
 def fetch_stock(code: str, name: str, cutoff: str, raw_dir: Path) -> dict:
@@ -90,12 +155,36 @@ def main() -> None:
             except Exception as exc:
                 errors.append(dict(code=code, name=name, error=f'{type(exc).__name__}: {exc}'))
                 print(code, 'FAILED', str(exc), flush=True)
-    result = dict(version=1, generated_at=now.isoformat(), cutoff=cutoff,
+    stocks.sort(key=lambda item: item['code'])
+    for stock in stocks:
+        try:
+            rows = fetch_historical_amounts(
+                ('sh' if stock['code'].startswith('6') else 'sz') + stock['code'],
+                stock['bars'][0]['date'],
+                cutoff,
+            )
+            coverage = merge_historical_averages(stock['bars'], rows)
+            stock['amount_status'] = coverage['status']
+            stock['average_coverage'] = coverage
+            print(stock['code'], 'AVERAGE', f"{coverage['covered']}/{coverage['total']}", flush=True)
+        except Exception as exc:
+            stock['amount_error'] = f'{type(exc).__name__}: {exc}'
+            stock['average_coverage'] = {
+                'added': 0,
+                'rejected': 0,
+                'covered': sum(bar.get('average') is not None for bar in stock['bars']),
+                'total': len(stock['bars']),
+                'status': stock['amount_status'],
+            }
+            print(stock['code'], 'AVERAGE FAILED', str(exc), flush=True)
+
+    result = dict(version=2, generated_at=now.isoformat(), cutoff=cutoff,
                   start=(cutoff_day - dt.timedelta(days=365)).isoformat(),
                   universe='用户截图主板股票 + 远东股份；事后观察池，非全主板', expected_count=len(POOL),
-                  limitations=['仅最新日可从收盘报价补成交均价，历史成交额缺失，1亿元流动性条件未验收', '没有实时板块热度与历史ST/停牌完整状态',
+                  limitations=['历史均价由新浪实际成交额/成交股数计算，并按收盘价比例映射到腾讯前复权口径；跨源结果均校验在当日高低区间内',
+                               '历史成交额已采集但1亿元流动性条件尚未纳入策略筛选', '没有实时板块热度与历史ST/停牌完整状态',
                                '观察池为事后选定，结果仅作研究演示，存在选样偏差', '止损价是理论成交基准，已单列成本与不可交易情况'],
-                  stocks=sorted(stocks, key=lambda x: x['code']), errors=errors)
+                  stocks=stocks, errors=errors)
     archive = raw_dir.parent / 'trend-lab-data.json'
     archive.write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
     if not stocks:

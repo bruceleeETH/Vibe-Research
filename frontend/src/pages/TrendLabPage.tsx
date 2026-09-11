@@ -46,7 +46,7 @@ export function TrendLabPage() {
     {error && <p role="alert" className="rounded-xl bg-red-500/10 p-4 text-red-500">{error}</p>}
     {!data && !error && <p className="p-10">正在读取本地行情…</p>}
     {data && study && base && <>
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-sm leading-7"><strong>覆盖 {data.stocks.length}/{data.expected_count} 只指定主板股票 · 非全市场回测</strong><p>数据截至 {data.cutoff}，研究窗口 {data.start} — {data.cutoff}。截图观察池存在事后选样偏差；历史成交额、板块热度及历史 ST 状态未验收，当前命中仅是价格与量能条件命中。</p><p className="text-xs text-muted-foreground">采集时间 {new Date(data.generated_at).toLocaleString('zh-CN', { hour12: false })} · 腾讯前复权日线 · {data.errors.length} 项采集失败</p></div>
+      <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 text-sm leading-7"><strong>覆盖 {data.stocks.length}/{data.expected_count} 只指定主板股票 · 非全市场回测</strong><p>数据截至 {data.cutoff}，研究窗口 {data.start} — {data.cutoff}。截图观察池存在事后选样偏差；板块热度及历史 ST 状态未验收，当前命中仅是价格与量能条件命中。</p><p className="text-xs text-muted-foreground">采集时间 {new Date(data.generated_at).toLocaleString('zh-CN', { hour12: false })} · 腾讯前复权日线 + 新浪历史成交额 · {data.errors.length} 项行情采集失败 · {data.stocks.filter(s => s.average_coverage?.status !== 'history_complete').length} 只均价未完整</p></div>
       <TrendDateReview data={data} options={options} />
       <details className="rounded-2xl border border-border bg-card p-5"><summary className="cursor-pointer font-semibold">收盘条件探索统计（展开查看）</summary><div className="mt-5 space-y-5">
       <section className="rounded-2xl border border-border bg-card p-5"><div className="mb-4 flex items-center justify-between"><h2 className="font-semibold">策略参数</h2><span className="text-xs text-muted-foreground">5日涨幅 &gt; 0 且 10日涨幅 &gt; 0</span></div><div className="flex flex-wrap items-end gap-4">
@@ -66,7 +66,7 @@ export function TrendLabPage() {
       </section>
       {stock && <section className="rounded-2xl border border-border bg-card p-5"><PriceChart stock={stock} /></section>}
       </div></details>
-      <footer className="text-xs leading-6 text-muted-foreground">公开行情保存在本地，重算不产生交易。更新行情命令：<code>python3 tools/trend_lab_data.py</code>。收益使用前复权价格比值；日线成交量倍数与同花顺盘中“量比”口径不同。{data.errors.map(e => <p key={e.code}>{e.code}：{e.error}</p>)}</footer>
+      <footer className="text-xs leading-6 text-muted-foreground">公开行情保存在本地，重算不产生交易。更新行情命令：<code>backend/.venv/bin/python tools/trend_lab_data.py</code>。收益使用前复权价格比值；历史均价是跨源校准后的全天成交均价，不是可成交价格；日线成交量倍数与同花顺盘中“量比”口径不同。{data.errors.map(e => <p key={e.code}>{e.code}：{e.error}</p>)}{data.stocks.filter(s => s.amount_error).map(s => <p key={s.code}>{s.code} 均价：{s.amount_error}</p>)}</footer>
     </>}
   </div>;
 }

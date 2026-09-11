@@ -1,5 +1,31 @@
-export type Bar = { date: string; open: number; close: number; high: number; low: number; volume: number; average?: number; amount?: number };
-export type Stock = { code: string; name: string; bars: Bar[]; source_url: string };
+export type Bar = {
+  date: string;
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+  volume: number;
+  average?: number;
+  amount?: number;
+  average_source?: string;
+  average_adjustment_factor?: number;
+};
+export type AverageCoverage = {
+  added: number;
+  rejected: number;
+  covered: number;
+  total: number;
+  status: 'history_complete' | 'history_partial' | 'latest_only' | 'missing';
+};
+export type Stock = {
+  code: string;
+  name: string;
+  bars: Bar[];
+  source_url: string;
+  amount_status?: AverageCoverage['status'];
+  average_coverage?: AverageCoverage;
+  amount_error?: string;
+};
 export type TrendData = { generated_at: string; cutoff: string; start: string; universe: string; expected_count: number; limitations: string[]; stocks: Stock[]; errors: { code: string; error: string }[] };
 export type Options = { volume: number; stop: number; days: number; cost: number; mode: 'day' | 'recent' | 'none'; entryTiming?: 'next-open' | 'signal-close' };
 export type Features = { r5: number; r10: number; r20: number; vr: number; ma5: number; ma10: number };
